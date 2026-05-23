@@ -6,24 +6,34 @@ A step-by-step Python learning project for surrogate-assisted optimisation, stru
 
 ---
 
-## Primary Model: Neural Network with MC Dropout
+## Primary Models: Two NN Uncertainty Methods
 
-The neural network surrogate is the main contribution. All other models (GP, RBF, Random Forest) are baselines.
+Both methods are main contributions. GP, RBF, and Random Forest are baselines.
 
-**Architecture:**
+### Method A — MC Dropout (Lesson 10)
 ```
 Input(d) → Linear(64) → ReLU → Dropout(0.1)
          → Linear(64) → ReLU → Dropout(0.1)
          → Linear(1)
+
+Predict: run 50 forward passes with dropout ON → mean μ, variance σ²
 ```
+- Single network, cheap to train
+- Reference: Gal & Ghahramani (2016)
 
-**Uncertainty via MC Dropout:**
-- Keep dropout ON at prediction time
-- Run N=50 forward passes
-- Mean = surrogate prediction, Variance = uncertainty estimate
-- Feed mean + variance into EI acquisition function
+### Method B — Deep Ensembles (Lesson 11)
+```
+5 × [Input(d) → Linear(64) → ReLU → Linear(64) → ReLU → Linear(1)]
+Each trained independently with a different random seed.
 
-**When implementing surrogates:** always implement the NN version. Implement GP as a comparison only.
+Predict: run all 5 networks → mean μ, variance σ² across outputs
+```
+- Better calibrated uncertainty than MC Dropout
+- Reference: Lakshminarayanan et al. (2017)
+
+**Lesson 12 compares both methods head-to-head** — this comparison is a core paper result.
+
+**When implementing surrogates:** implement both NN methods. GP is always a baseline.
 
 ---
 
@@ -77,12 +87,14 @@ Additional Python files are allowed inside a lesson folder if the lesson needs h
 | `lesson-7` | Acquisition functions: PI, EI, UCB | Core algorithm |
 | `lesson-8` | Bayesian Optimisation loop with GP | Baseline loop |
 | `lesson-9` | PyTorch basics: tensors, `nn.Module`, training loop | NN tooling |
-| `lesson-10` | **NN surrogate + MC Dropout** | **Main contribution** |
-| `lesson-11` | Model comparison: NN vs. GP vs. RBF vs. RF | Experiments |
-| `lesson-12` | Noise handling and high-dimensional inputs | Robustness |
-| `lesson-13` | COCO / BBOB benchmark | Evaluation |
-| `lesson-14` | Statistical analysis and paper figures | Results |
-| `lesson-15` | Writing the research paper | Paper |
+| `lesson-10` | **NN surrogate + MC Dropout** | **Main contribution A** |
+| `lesson-11` | **NN surrogate + Deep Ensembles** | **Main contribution B** |
+| `lesson-12` | MC Dropout vs. Deep Ensembles vs. GP | Core comparison |
+| `lesson-13` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
+| `lesson-14` | Noise handling and high-dimensional inputs | Robustness |
+| `lesson-15` | COCO / BBOB benchmark | Evaluation |
+| `lesson-16` | Statistical analysis and paper figures | Results |
+| `lesson-17` | Writing the research paper | Paper |
 
 ---
 
@@ -143,7 +155,8 @@ jupyter notebook lesson-N/notebook.ipynb
 
 - Do not skip lessons — each one introduces a concept the next depends on
 - Do not use GP as the main model — it is always a baseline
+- Do not skip Lesson 10 before Lesson 11 — Deep Ensembles build on the same BO loop
 - Do not add abstractions before they are needed
 - Do not introduce PyTorch before Lesson 9
 - Do not mock expensive function evaluations — run on small budgets instead
-- Do not put shared code outside lesson folders until Lesson 11 makes it necessary
+- Do not put shared code outside lesson folders until Lesson 13 makes it necessary

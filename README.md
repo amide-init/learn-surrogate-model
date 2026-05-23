@@ -16,12 +16,16 @@ Build and evaluate a **neural network surrogate** for expensive black-box optimi
 
 ## Paper Angle
 
-**"Neural Network Surrogate with Uncertainty Estimation for Bayesian Optimisation on BBOB"**
+**"Neural Network Surrogates with Uncertainty Estimation for Bayesian Optimisation on BBOB: MC Dropout vs. Deep Ensembles"**
 
-- Surrogate model: feedforward neural network (PyTorch) with MC Dropout for uncertainty
+- Surrogate models: feedforward neural network (PyTorch) with two uncertainty methods:
+  - **MC Dropout** (Gal & Ghahramani 2016) — single network, dropout at inference
+  - **Deep Ensembles** (Lakshminarayanan 2017) — 5 independently trained networks
 - Acquisition function: Expected Improvement using NN predictive mean and variance
 - Benchmark: COCO BBOB 24-function noiseless suite, dimensions 2 and 5
 - Baselines: GP-BO, CMA-ES, random search
+
+> Both uncertainty methods are taught and compared. The comparison between MC Dropout and Deep Ensembles is itself a contribution.
 
 ---
 
@@ -205,92 +209,164 @@ Work through lessons in order. Do not skip — each one builds on the last.
 
 ---
 
-## Lesson 10 — Neural Network Surrogate (Main Contribution)
+## Lesson 10 — Neural Network Surrogate + MC Dropout
 
-**What you will learn:** How to use a neural network as a surrogate model with uncertainty estimates.
+**What you will learn:** The first uncertainty method — a single network that estimates its own uncertainty using dropout at inference time.
 
 **Why plain NN fails as a surrogate:**
-- NN gives a point prediction — no uncertainty → pure exploitation → gets stuck
+- A standard NN gives one number per input — no uncertainty → pure exploitation → gets stuck
 
-**Solution — MC Dropout:**
+**Solution — MC Dropout (Gal & Ghahramani 2016):**
 - Add `Dropout(p=0.1)` layers to the network
-- At prediction time, keep dropout ON and run N forward passes
+- At training time: dropout randomly zeros activations (regularisation)
+- At prediction time: keep dropout ON and run N=50 forward passes
 - Mean of N predictions = surrogate mean
 - Variance of N predictions = surrogate uncertainty
 
-**Network architecture:**
 ```
+Architecture:
 Input(d) → Linear(64) → ReLU → Dropout(0.1)
          → Linear(64) → ReLU → Dropout(0.1)
          → Linear(1)
+
+Prediction:
+Run 50 forward passes → mean μ, variance σ²
+Feed μ, σ² into EI acquisition
 ```
 
-**What you will build:** `lesson-10/nn_surrogate.py` and `lesson-10/main.py`
-- `NNSurrogate` class with `fit(X, y)` and `predict(X_new, n_samples=50)`
-- Returns mean and variance from MC Dropout samples
-- Plug into the EI acquisition function from Lesson 7
-- Run the full BO loop from Lesson 8 with NN instead of GP
-- Plot: NN surrogate fit, uncertainty band, EI landscape
+**What you will build:** `lesson-10/mc_dropout.py` and `lesson-10/main.py`
+- `MCDropoutSurrogate` class: `fit(X, y)` and `predict(X_new, n_samples=50)`
+- Plug into the EI acquisition from Lesson 7
+- Run the full BO loop with MC Dropout NN instead of GP
+- Plot: surrogate mean, ±2σ uncertainty band, EI landscape
 
-**Why it matters:** This is the core contribution of your paper. Everything before leads here; everything after evaluates this.
-
----
-
-## Lesson 11 — Surrogate Model Comparison
-
-**What you will learn:** How your neural network compares to other surrogates.
-
-| Model | Uncertainty | Scales to high-d | Package |
-|---|---|---|---|
-| **NN + MC Dropout** | Yes (approximate) | Yes | `torch` |
-| Gaussian Process | Yes (exact) | No (O(n³)) | `sklearn` |
-| RBF Interpolation | No | Yes | `scipy` |
-| Random Forest | Yes (empirical) | Yes | `sklearn` |
-
-**What you will build:** `lesson-11/main.py`
-- Run all four models on the same test functions
-- Same initial data, same budget, same acquisition function (EI)
-- Metrics: best value found, surrogate RMSE, wall-clock time
-- Output: comparison table and box plots
-
-**Why it matters:** Model comparison results are a core section of your paper. The NN should win or tie in mid-to-high dimensions where GP struggles.
+**Why it matters:** MC Dropout is simple, cheap, and well-cited. It is the first NN uncertainty method in your paper.
 
 ---
 
-## Lesson 12 — Handling Noise and High Dimensions
+## Lesson 11 — Neural Network Surrogate + Deep Ensembles
 
-**What you will learn:** How to make your neural network surrogate more robust.
+**What you will learn:** The second uncertainty method — train multiple independent networks and use their disagreement as uncertainty.
 
-**Noise:**
-- Add a noise output head or increase dropout during training
-- Compare: NN-BO with and without noise handling on noisy test functions
+**Solution — Deep Ensembles (Lakshminarayanan 2017):**
+- Train K=5 identical networks independently with different random seeds
+- At prediction time: run all 5 networks on the same input
+- Mean of 5 predictions = surrogate mean
+- Variance of 5 predictions = surrogate uncertainty (ensemble disagreement)
 
-**High dimensions:**
-- NN naturally handles many inputs (no O(n³) bottleneck)
-- Add a larger first layer or use an embedding for high-d inputs
-- Experiment: run at d = 2, 5, 10, 20 and plot best value vs. dimension
+```
+Architecture (×5 independent networks):
+Input(d) → Linear(64) → ReLU
+         → Linear(64) → ReLU
+         → Linear(1)
+
+Prediction:
+5 networks → 5 outputs → mean μ, variance σ²
+Feed μ, σ² into EI acquisition
+```
+
+**MC Dropout vs. Deep Ensembles:**
+
+| Property | MC Dropout | Deep Ensembles |
+|---|---|---|
+| Networks trained | 1 | 5 |
+| Training cost | Low | 5× higher |
+| Prediction cost | N forward passes | 5 forward passes |
+| Uncertainty quality | Approximate | Better calibrated |
+| Implementation | Simple | Straightforward |
+| Paper citation | Gal 2016 | Lakshminarayanan 2017 |
+
+**What you will build:** `lesson-11/deep_ensemble.py` and `lesson-11/main.py`
+- `DeepEnsembleSurrogate` class: trains 5 networks, returns mean + variance
+- Run the full BO loop with Deep Ensemble NN
+- Side-by-side comparison: MC Dropout uncertainty vs. Deep Ensemble uncertainty on the same data
+- Plot: both uncertainty bands on the same function
+
+**Why it matters:** Deep Ensembles typically produce better-calibrated uncertainty. Comparing them gives you a second result in your paper.
+
+---
+
+## Lesson 12 — Comparing Uncertainty Methods
+
+**What you will learn:** Which uncertainty method works better as a surrogate, and when.
+
+**What you will compare:**
+- MC Dropout (Lesson 10) vs. Deep Ensembles (Lesson 11) vs. GP (Lesson 6)
+- On the same test functions, same budget, same acquisition function (EI)
+
+**Metrics:**
+- Best value found (optimisation quality)
+- Surrogate RMSE (how accurate is the fit)
+- Uncertainty calibration (does high variance correspond to high error?)
+- Wall-clock time per iteration
 
 **What you will build:** `lesson-12/main.py`
-- Noisy BO experiment: NN vs. GP on noisy Forrester
-- Scalability experiment: NN vs. GP across dimensions
+- Run all three on Forrester (1D), Branin (2D), Hartmann-3 (3D)
+- Calibration plot: predicted σ vs. actual error
+- Convergence curves: best value vs. evaluations for all three
+- Summary table: RMSE, best value, time
 
-**Why it matters:** Shows the cases where NN beats GP — the "when to use NN" claim in your paper.
+**Why it matters:** This comparison is the core result of your paper — it directly answers "which NN uncertainty method works best as a surrogate?"
 
 ---
 
-## Lesson 13 — COCO / BBOB Benchmark
+## Lesson 13 — Surrogate Model Comparison (All Methods)
 
-**What you will learn:** How to evaluate your algorithm on the community-standard benchmark.
+**What you will learn:** How all surrogate models compare on a common benchmark.
 
-- COCO framework: `cocoex` (run) + `cocopp` (plot)
-- BBOB suite: 24 noiseless functions across different landscape types
-- Budget: `100 × dimension` evaluations
-- Metrics: ERT, ECDF
+| Model | Uncertainty method | Package |
+|---|---|---|
+| **NN + MC Dropout** | Dropout at inference | `torch` |
+| **NN + Deep Ensembles** | Ensemble disagreement | `torch` |
+| Gaussian Process | Exact posterior | `sklearn` |
+| Random Forest | Tree variance | `sklearn` |
+| RBF Interpolation | None | `scipy` |
 
 **What you will build:** `lesson-13/main.py`
-- Wrap your NN-BO from Lesson 10 in a COCO-compatible interface
+- All five models, same test functions, same budget, same EI acquisition
+- Metrics: best value found, RMSE, wall-clock time
+- Box plots across 10 independent runs
+- LaTeX-ready comparison table
+
+**Why it matters:** Positions NN methods in the full landscape of surrogate models. Strengthens your related work section.
+
+---
+
+## Lesson 14 — Noise and High Dimensions
+
+**What you will learn:** Where NN surrogates beat GP — the "when to use NN" claim.
+
+**Noise:**
+- GP with noise: add σ_n² to kernel diagonal — exact but still O(n³)
+- NN with noise: train on noisy data — scales better, no explicit noise model needed
+- Compare: NN-BO vs. GP-BO on noisy Forrester at σ = 0.1, 0.5, 1.0
+
+**High dimensions:**
+- GP cost: O(n³) in data, kernel matrix grows with dimension → breaks at d ≥ 20
+- NN cost: O(n) in data, scales naturally with input dimension
+- Experiment: d = 2, 5, 10, 20 — plot best value vs. dimension for NN and GP
+
+**What you will build:** `lesson-14/main.py`
+- Noisy BO: MC Dropout vs. Deep Ensemble vs. GP on noisy Forrester
+- Scalability: NN vs. GP across dimensions
+
+**Why it matters:** This is the "advantages" section of your paper — where your contribution clearly wins.
+
+---
+
+## Lesson 15 — COCO / BBOB Benchmark
+
+**What you will learn:** How to evaluate on the community-standard benchmark for fair comparison with published work.
+
+- COCO framework: `cocoex` (run) + `cocopp` (plot)
+- BBOB suite: 24 noiseless functions, dimensions 2 and 5
+- Budget: `500 × dimension` evaluations
+- Metrics: ERT (Expected Running Time), ECDF curves
+
+**What you will build:** `lesson-15/main.py`
+- Wrap MC Dropout NN-BO and Deep Ensemble NN-BO in COCO-compatible interfaces
 - Run on all 24 BBOB functions, dimensions 2 and 5
-- Run the same for GP-BO and CMA-ES as baselines
+- Run GP-BO and CMA-ES as baselines
 - Generate ECDF plots with `cocopp`
 
 **COCO key concepts:**
@@ -302,72 +378,73 @@ Input(d) → Linear(64) → ReLU → Dropout(0.1)
 | ECDF | Fraction of (function, instance, target) triples solved |
 | ERT | Expected evaluations to reach a target |
 
-**Why it matters:** ECDF plots are mandatory for GECCO/CEC papers. This is the experiment your paper's results section is built on.
+**Why it matters:** ECDF plots are mandatory for GECCO/CEC papers. Your paper needs these to be accepted.
 
 ---
 
-## Lesson 14 — Statistical Analysis and Paper Figures
+## Lesson 16 — Statistical Analysis and Paper Figures
 
-**What you will learn:** How to turn raw results into defensible scientific claims.
+**What you will learn:** How to turn raw results into defensible claims.
 
-- Ablation study: remove MC Dropout → compare to deterministic NN
-- Ablation: swap EI → random acquisition
-- Wilcoxon signed-rank test between NN-BO and GP-BO
+- Ablation: MC Dropout → deterministic NN (remove uncertainty)
+- Ablation: Deep Ensembles → single network (remove ensemble)
+- Ablation: EI → random acquisition
+- Wilcoxon signed-rank test: MC Dropout vs. Deep Ensemble vs. GP
 - Friedman test across all algorithms
-- Publication-quality figures: ECDF, convergence curves, box plots
+- Publication-quality figures
 
-**What you will build:** `lesson-14/main.py`
+**What you will build:** `lesson-16/main.py`
 - All ablation runs
 - Statistical significance tests
-- LaTeX-ready results table with significance symbols (†, ‡)
+- LaTeX-ready table with means, std, significance symbols (†, ‡)
 
-**Why it matters:** Reviewers check this section first. Without statistical tests, claims of "better" will be rejected.
+**Why it matters:** Without statistical tests, claims of "better" will be rejected by reviewers.
 
 ---
 
-## Lesson 15 — Writing the Research Paper
+## Lesson 17 — Writing the Research Paper
 
 **Paper structure:**
 
 ```
 1. Introduction
    ├── Problem: expensive black-box optimisation
-   ├── Gap: GPs scale poorly; NNs lack uncertainty
-   ├── Contribution: NN surrogate with MC Dropout for BO
+   ├── Gap: GPs scale poorly; plain NNs have no uncertainty
+   ├── Contribution: compare MC Dropout vs. Deep Ensembles as NN surrogates
    └── Paper outline
 
 2. Background
    ├── Black-box optimisation (Lesson 2)
    ├── Surrogate-assisted optimisation (Lesson 3)
-   ├── Gaussian Processes (Lesson 6) — for comparison
+   ├── Gaussian Processes (Lesson 6) — baseline
    └── Bayesian Optimisation loop (Lesson 8)
 
 3. Related Work
-   ├── GP-based BO (standard literature)
+   ├── GP-based BO
    ├── Neural network surrogates (prior work)
-   ├── MC Dropout for uncertainty (Gal & Ghahramani 2016)
-   └── Deep ensembles (Lakshminarayanan 2017)
+   ├── MC Dropout — Gal & Ghahramani (2016)
+   └── Deep Ensembles — Lakshminarayanan et al. (2017)
 
-4. Proposed Method — NN Surrogate with MC Dropout
-   ├── Network architecture
-   ├── MC Dropout uncertainty derivation
-   ├── EI acquisition with NN
-   └── Full algorithm pseudocode
+4. Proposed Methods
+   ├── Shared: network architecture, EI acquisition, BO loop
+   ├── Method A: MC Dropout (Lesson 10)
+   └── Method B: Deep Ensembles (Lesson 11)
 
 5. Experimental Setup
-   ├── BBOB benchmark description (Lesson 13)
+   ├── BBOB test suite (Lesson 15)
    ├── Baselines: GP-BO, CMA-ES, random search
    └── Metrics: ERT, ECDF, best-so-far
 
 6. Results and Discussion
-   ├── ECDF plots — NN vs. GP vs. CMA-ES
-   ├── Ablation: MC Dropout vs. deterministic NN
-   ├── Scalability: NN vs. GP across dimensions
-   ├── Statistical significance (Lesson 14)
-   └── Limitations: NN needs more data than GP in low-d
+   ├── MC Dropout vs. Deep Ensembles — uncertainty quality (Lesson 12)
+   ├── All surrogates comparison (Lesson 13)
+   ├── Noise and scalability (Lesson 14)
+   ├── ECDF plots (Lesson 15)
+   ├── Ablation study (Lesson 16)
+   ├── Statistical significance (Lesson 16)
+   └── Limitations
 
 7. Conclusion and Future Work
-   └── Future: deep ensembles, Bayesian neural networks, multi-fidelity
 
 References
 ```
@@ -397,7 +474,7 @@ You should see `(.venv)` at the start of your terminal prompt — this confirms 
 pip install -r requirements.txt
 ```
 
-This installs everything needed for all 15 lessons.
+This installs everything needed for all 17 lessons.
 
 ### 3. Verify the setup
 
@@ -450,12 +527,14 @@ learn-surrogate/
 ├── lesson-7/          # Acquisition functions
 ├── lesson-8/          # BO loop with GP
 ├── lesson-9/          # PyTorch basics
-├── lesson-10/         # NN surrogate — main contribution
-├── lesson-11/         # Model comparison
-├── lesson-12/         # Noise and high dimensions
-├── lesson-13/         # COCO benchmark
-├── lesson-14/         # Statistical analysis
-├── lesson-15/         # Paper writing guide
+├── lesson-10/         # NN surrogate + MC Dropout
+├── lesson-11/         # NN surrogate + Deep Ensembles
+├── lesson-12/         # MC Dropout vs. Deep Ensembles vs. GP
+├── lesson-13/         # All surrogates comparison
+├── lesson-14/         # Noise and high dimensions
+├── lesson-15/         # COCO benchmark
+├── lesson-16/         # Statistical analysis and paper figures
+├── lesson-17/         # Paper writing guide
 ├── results/           # Benchmark outputs (gitignored)
 └── requirements.txt
 ```
