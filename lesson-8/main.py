@@ -90,13 +90,13 @@ def run_bo_1d(n_init, budget, kern_fn, noise=0.01, xi=0.01, seed=0,
         if i in snap_set:
             snapshots[i] = dict(X=X.copy(), y=y.copy(),
                                 mu=mu, std=std, ei=ei_vals,
-                                x_next=float(x_cand[idx]),
-                                y_next=float(forrester(x_cand[[idx]])),
+                                x_next=float(x_cand[idx, 0]),
+                                y_next=float(forrester(x_cand[[idx]]).item()),
                                 f_best=f_best, n_eval=n_init + i)
 
         x_next = x_cand[[idx]]
         X      = np.vstack([X, x_next])
-        y      = np.append(y, float(forrester(x_next)))
+        y      = np.append(y, forrester(x_next).item())
         best_history.append(float(y.min()))
 
     return X, y, best_history, snapshots
@@ -118,7 +118,7 @@ def run_bo_2d(n_init, budget, kern_fn, noise=0.1, xi=0.01, seed=0):
         idx     = int(np.argmax(ei_vals))
         x_next  = x_cand[[idx]]
         X       = np.vstack([X, x_next])
-        y       = np.append(y, float(branin_norm(x_next)))
+        y       = np.append(y, branin_norm(x_next).item())
         best_history.append(float(y.min()))
 
     return X, y, best_history
