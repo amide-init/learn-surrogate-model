@@ -1,0 +1,30 @@
+# Virtual environment
+.venv/
+
+# Lesson outputs
+lesson-*/output/
+
+# COCO benchmark output
+results/
+benchmark/exdata/
+
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
