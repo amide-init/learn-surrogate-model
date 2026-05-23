@@ -310,7 +310,49 @@ Feed μ, σ² into EI acquisition
 
 ---
 
-## Lesson 13 — Surrogate Model Comparison (All Methods)
+## Lesson 13 — Surrogate Control Strategies (Critical Concept)
+
+**What you will learn:** The most commonly misunderstood concept in surrogate-assisted optimisation — how many evaluations should actually hit the expensive function?
+
+**The core rule:**
+> A surrogate is only useful if it **reduces** the number of real function evaluations. If every candidate still gets evaluated with the real function, the surrogate saves nothing.
+
+**Three control strategies:**
+
+| Strategy | How it works | Real eval ratio |
+|---|---|---|
+| **No control (wrong)** | Surrogate scores candidates but all get real evals | ~100% |
+| **Generation-based** | Every k-th generation uses real evals; others use surrogate only | ~1/k |
+| **Individual-based** | Only top-μ candidates per generation get real evals | μ/λ (e.g. 10%) |
+| **Pre-selection** | Generate large pool → surrogate filters → small set gets real evals | ~1-5% |
+
+**The AFN-CMA-ES bug (Issue #1 from the reviewed paper):**
+```python
+# BROKEN — surrogate reorders 8 candidates, all 8 still get real evals
+solutions = es.ask()                        # returns 8 candidates
+top_indices = np.argsort(scores)[-8:]       # picks 8 FROM 8 — no-op!
+for x in solutions:
+    f = objective_function(x)               # 100% real evaluations!
+
+# CORRECT — surrogate filters 1000 down to 8, only 8 get real evals
+large_pool = es.ask(number=1000)            # 1000 candidates
+mean, std = surrogate.predict(large_pool)
+top_8 = select_top_by_ucb(mean, std, k=8)
+for x in top_8:
+    f = objective_function(x)               # 0.8% real evaluations ✓
+```
+
+**What you will build:** `lesson-13/main.py`
+- Implement the correct pre-selection loop from scratch (no CMA-ES dependency yet)
+- Track and plot: surrogate evaluations vs. real evaluations per iteration
+- Compare convergence: no-control vs. pre-selection on Forrester and Branin
+- Compute surrogate control ratio (SCR = real evals / total candidates) per run
+
+**Why it matters:** This is the exact issue the paper reviewer flagged. Understanding SCR is essential before running COCO experiments — without it, your algorithm is not a surrogate-assisted method at all.
+
+---
+
+## Lesson 14 — Surrogate Model Comparison (All Methods)
 
 **What you will learn:** How all surrogate models compare on a common benchmark.
 
@@ -322,17 +364,17 @@ Feed μ, σ² into EI acquisition
 | Random Forest | Tree variance | `sklearn` |
 | RBF Interpolation | None | `scipy` |
 
-**What you will build:** `lesson-13/main.py`
+**What you will build:** `lesson-14/main.py`
 - All five models, same test functions, same budget, same EI acquisition
-- Metrics: best value found, RMSE, wall-clock time
-- Box plots across 10 independent runs
-- LaTeX-ready comparison table
+- Correct pre-selection loop from Lesson 13 applied to all models
+- Metrics: best value found, RMSE, SCR, wall-clock time
+- Box plots across 10 independent runs, LaTeX-ready comparison table
 
 **Why it matters:** Positions NN methods in the full landscape of surrogate models. Strengthens your related work section.
 
 ---
 
-## Lesson 14 — Noise and High Dimensions
+## Lesson 15 — Noise and High Dimensions
 
 **What you will learn:** Where NN surrogates beat GP — the "when to use NN" claim.
 
@@ -346,7 +388,7 @@ Feed μ, σ² into EI acquisition
 - NN cost: O(n) in data, scales naturally with input dimension
 - Experiment: d = 2, 5, 10, 20 — plot best value vs. dimension for NN and GP
 
-**What you will build:** `lesson-14/main.py`
+**What you will build:** `lesson-15/main.py`
 - Noisy BO: MC Dropout vs. Deep Ensemble vs. GP on noisy Forrester
 - Scalability: NN vs. GP across dimensions
 
@@ -354,7 +396,7 @@ Feed μ, σ² into EI acquisition
 
 ---
 
-## Lesson 15 — COCO / BBOB Benchmark
+## Lesson 16 — COCO / BBOB Benchmark
 
 **What you will learn:** How to evaluate on the community-standard benchmark for fair comparison with published work.
 
@@ -363,8 +405,9 @@ Feed μ, σ² into EI acquisition
 - Budget: `500 × dimension` evaluations
 - Metrics: ERT (Expected Running Time), ECDF curves
 
-**What you will build:** `lesson-15/main.py`
+**What you will build:** `lesson-16/main.py`
 - Wrap MC Dropout NN-BO and Deep Ensemble NN-BO in COCO-compatible interfaces
+- Apply correct SCR pre-selection — surrogate must save real evaluations
 - Run on all 24 BBOB functions, dimensions 2 and 5
 - Run GP-BO and CMA-ES as baselines
 - Generate ECDF plots with `cocopp`
@@ -377,12 +420,13 @@ Feed μ, σ² into EI acquisition
 | Target precision | f(x) − f\_opt < ∆f |
 | ECDF | Fraction of (function, instance, target) triples solved |
 | ERT | Expected evaluations to reach a target |
+| SCR | Surrogate control ratio — must be < 20% |
 
 **Why it matters:** ECDF plots are mandatory for GECCO/CEC papers. Your paper needs these to be accepted.
 
 ---
 
-## Lesson 16 — Statistical Analysis and Paper Figures
+## Lesson 17 — Statistical Analysis and Paper Figures
 
 **What you will learn:** How to turn raw results into defensible claims.
 
@@ -393,8 +437,8 @@ Feed μ, σ² into EI acquisition
 - Friedman test across all algorithms
 - Publication-quality figures
 
-**What you will build:** `lesson-16/main.py`
-- All ablation runs
+**What you will build:** `lesson-17/main.py`
+- All ablation runs including: pre-selection vs. no pre-selection (SCR ablation)
 - Statistical significance tests
 - LaTeX-ready table with means, std, significance symbols (†, ‡)
 
@@ -402,7 +446,7 @@ Feed μ, σ² into EI acquisition
 
 ---
 
-## Lesson 17 — Writing the Research Paper
+## Lesson 18 — Writing the Research Paper
 
 **Paper structure:**
 
@@ -474,7 +518,7 @@ You should see `(.venv)` at the start of your terminal prompt — this confirms 
 pip install -r requirements.txt
 ```
 
-This installs everything needed for all 17 lessons.
+This installs everything needed for all 18 lessons.
 
 ### 3. Verify the setup
 

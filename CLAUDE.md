@@ -90,11 +90,12 @@ Additional Python files are allowed inside a lesson folder if the lesson needs h
 | `lesson-10` | **NN surrogate + MC Dropout** | **Main contribution A** |
 | `lesson-11` | **NN surrogate + Deep Ensembles** | **Main contribution B** |
 | `lesson-12` | MC Dropout vs. Deep Ensembles vs. GP | Core comparison |
-| `lesson-13` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
-| `lesson-14` | Noise handling and high-dimensional inputs | Robustness |
-| `lesson-15` | COCO / BBOB benchmark | Evaluation |
-| `lesson-16` | Statistical analysis and paper figures | Results |
-| `lesson-17` | Writing the research paper | Paper |
+| `lesson-13` | **Surrogate control strategies (SCR)** | **Critical concept** |
+| `lesson-14` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
+| `lesson-15` | Noise handling and high-dimensional inputs | Robustness |
+| `lesson-16` | COCO / BBOB benchmark | Evaluation |
+| `lesson-17` | Statistical analysis and paper figures | Results |
+| `lesson-18` | Writing the research paper | Paper |
 
 ---
 
@@ -156,7 +157,9 @@ jupyter notebook lesson-N/notebook.ipynb
 - Do not skip lessons — each one introduces a concept the next depends on
 - Do not use GP as the main model — it is always a baseline
 - Do not skip Lesson 10 before Lesson 11 — Deep Ensembles build on the same BO loop
+- Do not skip Lesson 13 (SCR) before Lesson 16 (COCO) — without correct surrogate control, COCO results are invalid
+- Surrogate control ratio (SCR) must be < 20% in all experiments — the surrogate must save real evaluations
 - Do not add abstractions before they are needed
 - Do not introduce PyTorch before Lesson 9
 - Do not mock expensive function evaluations — run on small budgets instead
-- Do not put shared code outside lesson folders until Lesson 13 makes it necessary
+- Do not put shared code outside lesson folders until Lesson 14 makes it necessary
