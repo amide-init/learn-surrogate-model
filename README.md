@@ -1,370 +1,382 @@
 # learn-surrogate
 
-A Python project for learning surrogate-assisted optimisation from absolute zero — built so that completing all stages gives you enough theory, code, and experiments to write a research paper.
+A Python project for learning surrogate-assisted optimisation from absolute zero — with a **neural network as the primary surrogate model**. Built so that completing all lessons gives you enough theory, code, and experiments to write a research paper.
 
 No prior knowledge of machine learning or optimisation is assumed.
 
 ---
 
-## How to use this roadmap
+## Primary Goal
 
-Each stage has:
+Build and evaluate a **neural network surrogate** for expensive black-box optimisation, then benchmark it against Gaussian Processes and CMA-ES on the COCO/BBOB suite.
+
+> Gaussian Processes are taught first because they build the intuition you need to understand why and how a neural network works as a surrogate. They are the baseline, not the contribution.
+
+---
+
+## Paper Angle
+
+**"Neural Network Surrogate with Uncertainty Estimation for Bayesian Optimisation on BBOB"**
+
+- Surrogate model: feedforward neural network (PyTorch) with MC Dropout for uncertainty
+- Acquisition function: Expected Improvement using NN predictive mean and variance
+- Benchmark: COCO BBOB 24-function noiseless suite, dimensions 2 and 5
+- Baselines: GP-BO, CMA-ES, random search
+
+---
+
+## How to Use This Roadmap
+
+Each lesson has:
 - **What you will learn** — the concept in plain English
-- **What you will build** — a concrete Python script
-- **Why it matters** — how it connects to your research paper
+- **What you will build** — a concrete deliverable
+- **Why it matters** — which part of your paper it feeds
 
-Work through stages in order. Do not skip — each one builds on the last.
-
----
-
-## Stage 0 — Python and Scientific Computing Basics
-
-**What you will learn:** The tools every stage depends on.
-
-- NumPy: arrays, broadcasting, vectorised math
-- SciPy: built-in optimisers, statistics
-- Matplotlib: 1D line plots, 2D contour plots, subplots
-
-**What you will build:** `basics/s0_tools.py`
-- Plot y = sin(x) and y = x² with NumPy
-- Draw a 2D contour plot of f(x, y) = x² + y²
-- Use `scipy.optimize.minimize` to find the minimum of a simple function
-
-**Why it matters:** Every surrogate experiment you run will use these three libraries. Getting comfortable with them now saves hours of confusion later.
-
-**Resources:**
-- [NumPy quickstart](https://numpy.org/doc/stable/user/quickstart.html)
-- [Matplotlib tutorials](https://matplotlib.org/stable/tutorials/index.html)
+Work through lessons in order. Do not skip — each one builds on the last.
 
 ---
 
-## Stage 1 — What is Optimisation?
+## Lesson 1 — Python and Scientific Computing Basics
+
+**What you will learn:** The tools every lesson depends on.
+
+- NumPy: arrays, vectorised math, `linspace`, `meshgrid`
+- SciPy: built-in optimisers, `minimize`
+- Matplotlib: line plots, contour plots, subplots
+
+**What you will build:** `lesson-1/main.py`
+- Plot `sin(x)` and `x²` with NumPy
+- 2D contour + 3D surface of `f(x,y) = x² + y²`
+- Use `scipy.optimize.minimize` to find a minimum and mark it on the plot
+
+**Why it matters:** Every script in every lesson uses these three libraries.
+
+---
+
+## Lesson 2 — What is Optimisation?
 
 **What you will learn:** The problem surrogates are designed to solve.
 
-- What does "optimise a function" mean?
-- Types of optimisation: unconstrained, bounded, constrained
-- Gradient-based methods: gradient descent, L-BFGS-B
-- Why gradient-based methods fail: noisy functions, discontinuities, black boxes
+- Gradient descent: update rule, step size, convergence
+- Why gradient methods fail: black-box functions, noise, discontinuities
 - What "expensive" means: each evaluation costs real time, money, or compute
 
-**What you will build:** `basics/s1_optimisation.py`
-- Run gradient descent on f(x) = x² by hand (update rule, step size)
-- Use `scipy.optimize.minimize` on Rosenbrock and Ackley
-- Show that gradient descent fails when you add noise to the function
+**What you will build:** `lesson-2/main.py`
+- Implement gradient descent by hand on `f(x) = x²`
+- Run `scipy.optimize.minimize` on Rosenbrock and Ackley
+- Add noise to a function and show that gradient descent breaks
 
-**Why it matters:** Your paper's introduction must explain why standard optimisers are not enough. This stage gives you that argument.
-
----
-
-## Stage 2 — What is a Surrogate?
-
-**What you will learn:** The central idea of the whole project — in its simplest form.
-
-- A surrogate is a cheap model trained on a few evaluations of an expensive function
-- The loop: evaluate a few points → fit a model → use the model to decide where to evaluate next
-- Your first surrogate: polynomial regression
-
-**What you will build:** `basics/s2_first_surrogate.py`
-- Sample 5 points from f(x) = sin(x) + 0.1·x²
-- Fit a degree-3 polynomial (NumPy `polyfit`)
-- Plot: true function vs. surrogate approximation
-- Show what happens with 3 points vs. 10 points
-
-**Why it matters:** Polynomial regression is the simplest possible surrogate. Seeing it succeed and fail motivates why we need something smarter (Gaussian Processes).
+**Why it matters:** Your paper's introduction explains why standard optimisers are not enough. This lesson gives you that argument.
 
 ---
 
-## Stage 3 — Statistics Refresher
+## Lesson 3 — What is a Surrogate?
 
-**What you will learn:** The mathematical language used in every GP paper.
+**What you will learn:** The central idea of the whole project.
 
-- Random variables, mean, variance, standard deviation
-- Covariance and correlation
-- The Gaussian (normal) distribution: PDF, CDF, sampling
+- A surrogate is a cheap model that approximates an expensive function
+- The loop: evaluate a few points → fit model → use model to pick next point
+- First surrogate: polynomial regression (the simplest possible case)
+
+**What you will build:** `lesson-3/main.py`
+- Sample 5 points from `f(x) = sin(x) + 0.1x²`
+- Fit a degree-3 polynomial with NumPy `polyfit`
+- Plot: true function vs. surrogate — show where it fails
+
+**Why it matters:** Seeing a simple surrogate fail motivates everything that follows.
+
+---
+
+## Lesson 4 — Statistics Refresher
+
+**What you will learn:** The math behind uncertainty estimates — needed for both GP and neural network surrogates.
+
+- Mean, variance, standard deviation
 - Multivariate Gaussian: mean vector, covariance matrix
-- Conditional distributions: "given that X = x, what is Y?"
+- Conditional distributions: P(Y | X = x)
+- Sampling from a Gaussian
 
-**What you will build:** `basics/s3_statistics.py`
+**What you will build:** `lesson-4/main.py`
 - Plot 1D Gaussians with different means and variances
-- Sample from a 2D Gaussian and plot the scatter + ellipse
-- Compute and visualise the conditional distribution P(Y | X = x)
+- Sample from a 2D Gaussian, plot scatter and confidence ellipse
+- Visualise a conditional distribution
 
-**Why it matters:** Gaussian Processes are just multivariate Gaussians. If you understand this stage, GPs will feel natural.
-
----
-
-## Stage 4 — Kernels and Similarity
-
-**What you will learn:** How to measure similarity between inputs — the engine of GP models.
-
-- What is a kernel (covariance function)?
-- Intuition: points that are close in input space should have similar outputs
-- Common kernels:
-  - RBF / Squared Exponential: very smooth functions
-  - Matern-3/2, Matern-5/2: rough to smooth (most used in practice)
-  - Linear kernel: recovers linear regression
-- Hyperparameters: length-scale (how quickly similarity drops), signal variance
-
-**What you will build:** `basics/s4_kernels.py`
-- Implement RBF kernel: k(x, x') = σ² · exp(−‖x−x'‖² / 2l²)
-- Plot the kernel matrix (heatmap) for a set of 1D points
-- Show how length-scale changes the kernel matrix
-- Sample random functions from different kernels
-
-**Why it matters:** Kernel choice is one of the most cited design decisions in surrogate papers. You need to be able to justify your choice.
+**Why it matters:** Both GP uncertainty and MC Dropout uncertainty are Gaussian. You need this to understand what your neural network is outputting.
 
 ---
 
-## Stage 5 — Gaussian Process Regression
+## Lesson 5 — Kernels and Similarity
 
-**What you will learn:** The standard surrogate model used across most of the literature.
+**What you will learn:** How GPs measure similarity — and why neural networks learn this automatically.
 
-- A Gaussian Process (GP) = a distribution over functions
-- GP prior: before seeing data, what functions do we think are plausible?
-- GP posterior: after seeing data, what functions are still plausible?
-- Predictive mean and variance at new points
-- Fitting hyperparameters by maximising the log marginal likelihood
+- What is a kernel?
+- RBF, Matern-3/2, Matern-5/2 kernels
+- Length-scale hyperparameter
+- Sampling functions from a GP prior
 
-**What you will build:** `basics/s5_gp.py`
-- Build a GP class from scratch:
-  - `fit(X, y)`: compute kernel matrix, store Cholesky factor
-  - `predict(X_new)`: return posterior mean and variance
-- Test on the Forrester function (standard 1D benchmark)
-- Plot: data points, true function, GP mean, ±2σ uncertainty band
+**What you will build:** `lesson-5/main.py`
+- Implement RBF kernel from scratch
+- Plot kernel matrices as heatmaps
+- Sample and plot random functions from different kernels
 
-**Why it matters:** GP regression is the most common surrogate model. This is the core of your paper's methodology.
+**Why it matters:** Understanding kernels explains the GP baseline you will compare your NN against. It also helps you justify why NN can generalise better in higher dimensions.
 
 ---
 
-## Stage 6 — Acquisition Functions
+## Lesson 6 — Gaussian Process Regression (Baseline)
 
-**What you will learn:** How surrogates decide where to evaluate next.
+**What you will learn:** How to build the baseline model your neural network will compete against.
 
-- The exploration vs. exploitation trade-off
-- Probability of Improvement (PI): how likely is this point to beat the best so far?
-- Expected Improvement (EI): how much improvement do we expect on average?
-- Upper Confidence Bound (UCB): mean − κ · std (κ controls exploration)
+- GP as a distribution over functions
+- GP posterior: predictive mean and variance
+- Hyperparameter optimisation via log marginal likelihood
+- Strengths: data-efficient, principled uncertainty. Weaknesses: scales as O(n³), struggles in high dimensions
 
-| Function | Formula (informal) | Behaviour |
-|---|---|---|
-| PI | P(f(x) < f\*) | Conservative, fast convergence |
-| EI | E[max(f\* − f(x), 0)] | Balanced, most common in papers |
-| UCB | μ(x) − κ σ(x) | Explicit exploration control |
+**What you will build:** `lesson-6/main.py`
+- GP class from scratch: `fit(X, y)` and `predict(X_new)`
+- Test on Forrester function (standard 1D benchmark)
+- Plot: data, true function, GP mean, ±2σ uncertainty band
 
-**What you will build:** `basics/s6_acquisition.py`
-- Implement PI, EI, UCB as functions of GP mean and variance
-- Plot all three on the same 1D example alongside the GP surrogate
-- Show how κ in UCB changes the recommended next point
-
-**Why it matters:** Acquisition function choice and comparison is a common research contribution. Understanding all three lets you run ablation studies.
+**Why it matters:** This is your primary baseline. Your paper's claim is that a neural network surrogate is competitive with or better than GP in specific settings.
 
 ---
 
-## Stage 7 — The Bayesian Optimisation Loop
+## Lesson 7 — Acquisition Functions
 
-**What you will learn:** How everything wires together into a complete algorithm.
+**What you will learn:** How a surrogate tells the optimiser where to evaluate next.
+
+- Exploration vs. exploitation trade-off
+- Probability of Improvement (PI)
+- Expected Improvement (EI) — the acquisition function your paper will use
+- Upper Confidence Bound (UCB)
+
+| Function | Key property |
+|---|---|
+| PI | Conservative, fast convergence |
+| EI | Balanced — most common in papers |
+| UCB | Explicit exploration control via κ |
+
+**What you will build:** `lesson-7/main.py`
+- Implement PI, EI, UCB from the GP mean and variance
+- Plot all three alongside the surrogate on a 1D example
+
+**Why it matters:** EI is the acquisition function you will plug your neural network into. This lesson makes the connection clear.
+
+---
+
+## Lesson 8 — Bayesian Optimisation Loop
+
+**What you will learn:** How surrogate + acquisition combine into a full algorithm.
 
 ```
-1. Evaluate f at an initial set of points (design of experiments)
-2. Fit a GP surrogate to the observations
-3. Optimise the acquisition function to find the next point x*
-4. Evaluate f(x*) — this is the expensive step
-5. Add (x*, f(x*)) to the data and go to step 2
-6. Stop when the budget is exhausted
+1. Evaluate f at initial points (Latin Hypercube Sampling)
+2. Fit surrogate to observations
+3. Optimise acquisition function → find next point x*
+4. Evaluate f(x*)  ← expensive step
+5. Add (x*, f(x*)) to data → go to 2
+6. Stop when budget is exhausted
 ```
 
-**What you will build:** `basics/s7_bo_loop.py`
-- Implement the full loop as above
-- Initial design: Latin Hypercube Sampling (LHS) — better than random
-- Acquisition optimiser: multi-start L-BFGS-B (avoid local optima)
-- Test on: Forrester (1D), Branin (2D), Hartmann-3 (3D)
-- Plot convergence: best value found vs. number of evaluations
+**What you will build:** `lesson-8/main.py`
+- Full BO loop using GP as the surrogate
+- LHS initial design, multi-start L-BFGS-B for acquisition optimisation
+- Test on Forrester (1D), Branin (2D), Hartmann-3 (3D)
+- Convergence plot: best value found vs. number of evaluations
 
-**Why it matters:** This is your baseline algorithm. Every comparison in your paper starts here.
+**Why it matters:** This is the shell your neural network will slot into. In Lesson 10 you replace the GP with a neural network and everything else stays the same.
 
 ---
 
-## Stage 8 — Surrogate Model Comparison
+## Lesson 9 — PyTorch Basics for Surrogate Models
 
-**What you will learn:** When is a GP better or worse than other surrogate choices?
+**What you will learn:** The minimum PyTorch needed to build a neural network surrogate.
 
-| Model | Package | Key property |
-|---|---|---|
-| Gaussian Process | `sklearn.gaussian_process` | Uncertainty estimates, data-efficient |
-| Radial Basis Function | `scipy.interpolate` | Fast, deterministic, no uncertainty |
-| Random Forest | `sklearn.ensemble` | Handles discrete variables |
-| Polynomial Response Surface | `numpy.polyfit` | Interpretable, fast, low-dim only |
+- Tensors vs. NumPy arrays
+- Building a feedforward network with `nn.Module`
+- Training loop: forward pass, loss, backward pass, optimiser step
+- Saving and loading a model
 
-**What you will build:** `surrogate/s8_model_comparison.py`
+**What you will build:** `lesson-9/main.py`
+- Feedforward network that fits a 1D regression curve
+- Training loop with MSE loss and Adam optimiser
+- Plot: true function vs. NN prediction after training
+
+**Why it matters:** Direct preparation for Lesson 10. No surrogate context yet — just the tool.
+
+---
+
+## Lesson 10 — Neural Network Surrogate (Main Contribution)
+
+**What you will learn:** How to use a neural network as a surrogate model with uncertainty estimates.
+
+**Why plain NN fails as a surrogate:**
+- NN gives a point prediction — no uncertainty → pure exploitation → gets stuck
+
+**Solution — MC Dropout:**
+- Add `Dropout(p=0.1)` layers to the network
+- At prediction time, keep dropout ON and run N forward passes
+- Mean of N predictions = surrogate mean
+- Variance of N predictions = surrogate uncertainty
+
+**Network architecture:**
+```
+Input(d) → Linear(64) → ReLU → Dropout(0.1)
+         → Linear(64) → ReLU → Dropout(0.1)
+         → Linear(1)
+```
+
+**What you will build:** `lesson-10/nn_surrogate.py` and `lesson-10/main.py`
+- `NNSurrogate` class with `fit(X, y)` and `predict(X_new, n_samples=50)`
+- Returns mean and variance from MC Dropout samples
+- Plug into the EI acquisition function from Lesson 7
+- Run the full BO loop from Lesson 8 with NN instead of GP
+- Plot: NN surrogate fit, uncertainty band, EI landscape
+
+**Why it matters:** This is the core contribution of your paper. Everything before leads here; everything after evaluates this.
+
+---
+
+## Lesson 11 — Surrogate Model Comparison
+
+**What you will learn:** How your neural network compares to other surrogates.
+
+| Model | Uncertainty | Scales to high-d | Package |
+|---|---|---|---|
+| **NN + MC Dropout** | Yes (approximate) | Yes | `torch` |
+| Gaussian Process | Yes (exact) | No (O(n³)) | `sklearn` |
+| RBF Interpolation | No | Yes | `scipy` |
+| Random Forest | Yes (empirical) | Yes | `sklearn` |
+
+**What you will build:** `lesson-11/main.py`
 - Run all four models on the same test functions
-- Same initial data, same evaluation budget
-- Metrics: best value found, RMSE of surrogate fit, wall-clock time
+- Same initial data, same budget, same acquisition function (EI)
+- Metrics: best value found, surrogate RMSE, wall-clock time
 - Output: comparison table and box plots
 
-**Why it matters:** A model comparison experiment is a publishable contribution on its own. It also strengthens your justification for choosing GP.
+**Why it matters:** Model comparison results are a core section of your paper. The NN should win or tie in mid-to-high dimensions where GP struggles.
 
 ---
 
-## Stage 9 — Handling Noise
+## Lesson 12 — Handling Noise and High Dimensions
 
-**What you will learn:** Real experiments are noisy — your surrogate must handle this.
+**What you will learn:** How to make your neural network surrogate more robust.
 
-- Noise in observations: f(x) = f_true(x) + ε, ε ~ N(0, σ_n²)
-- GP with noise: add σ_n² to the diagonal of the kernel matrix
-- Estimating noise level from data
-- Noisy vs. noiseless acquisition (EI with noise)
+**Noise:**
+- Add a noise output head or increase dropout during training
+- Compare: NN-BO with and without noise handling on noisy test functions
 
-**What you will build:** `surrogate/s9_noisy_gp.py`
-- Add Gaussian noise to a test function
-- Fit a noisy GP and compare to a noiseless GP
-- Show how the uncertainty band grows with noise
-- Run BO with and without noise handling
+**High dimensions:**
+- NN naturally handles many inputs (no O(n³) bottleneck)
+- Add a larger first layer or use an embedding for high-d inputs
+- Experiment: run at d = 2, 5, 10, 20 and plot best value vs. dimension
 
-**Why it matters:** The COCO benchmark has a noisy variant. Papers that handle noise are more general and more publishable.
+**What you will build:** `lesson-12/main.py`
+- Noisy BO experiment: NN vs. GP on noisy Forrester
+- Scalability experiment: NN vs. GP across dimensions
 
----
-
-## Stage 10 — Scalability: High-Dimensional Surrogates
-
-**What you will learn:** Why GPs break in high dimensions and what to do about it.
-
-- The curse of dimensionality: GP kernel matrices become poorly conditioned
-- Automatic Relevance Determination (ARD): one length-scale per dimension, prunes irrelevant ones
-- Variable selection: identify which inputs actually matter
-- REMBO (Random EMbedding BO): project high-dim input into low-dim subspace
-
-**What you will build:** `surrogate/s10_high_dim.py`
-- Run BO with RBF kernel (single length-scale) vs. ARD kernel across d = 2, 5, 10, 20
-- Plot: best value found vs. dimension for both kernels
-- Add a function where only 3 of 10 inputs matter — show ARD finds them
-
-**Why it matters:** Most real engineering problems have many inputs. Scalability is a natural limitations section and future-work direction.
+**Why it matters:** Shows the cases where NN beats GP — the "when to use NN" claim in your paper.
 
 ---
 
-## Stage 11 — Surrogate-Assisted Evolutionary Algorithms (SAEA)
+## Lesson 13 — COCO / BBOB Benchmark
 
-**What you will learn:** A different paradigm — combining surrogates with population-based search.
+**What you will learn:** How to evaluate your algorithm on the community-standard benchmark.
 
-- Why pure BO (sequential, single-point) is slow at scale
-- SAEA: use the surrogate to pre-screen a population, only evaluate the best candidates
-- Offline vs. online surrogates
-- Simple (1+1)-ES with GP-based fitness approximation
+- COCO framework: `cocoex` (run) + `cocopp` (plot)
+- BBOB suite: 24 noiseless functions across different landscape types
+- Budget: `100 × dimension` evaluations
+- Metrics: ERT, ECDF
 
-**What you will build:** `surrogate/s11_saea.py`
-- Implement a (1+λ)-ES with surrogate pre-selection
-- Compare: vanilla ES vs. SAEA on Rastrigin and Hartmann-6
-- Plot: evaluations saved vs. solution quality
-
-**Why it matters:** SAEA is a major branch of surrogate literature (Jin 2011, Liu 2020). Including it widens your related work and shows breadth.
-
----
-
-## Stage 12 — COCO / BBOB Benchmark
-
-**What you will learn:** How to evaluate your algorithm on the community-standard benchmark so your results are comparable to published work.
-
-- COCO framework: `cocoex` (run experiments) + `cocopp` (generate plots)
-- BBOB suite: 24 noiseless test functions covering different landscape types
-- Dimensions: 2, 3, 5, 10, 20, 40
-- Budget: typically 10 × dimension to 1000 × dimension function evaluations
-- Metrics: ERT (Expected Running Time), ECDF curves
-
-**What you will build:** `benchmark/s12_coco_run.py`
-- Wrap your Stage 7 BO algorithm in a COCO-compatible interface
-- Run on all 24 BBOB functions, dimensions 2 and 5, budget = 100 × dimension
+**What you will build:** `lesson-13/main.py`
+- Wrap your NN-BO from Lesson 10 in a COCO-compatible interface
+- Run on all 24 BBOB functions, dimensions 2 and 5
+- Run the same for GP-BO and CMA-ES as baselines
 - Generate ECDF plots with `cocopp`
-- Compare to CMA-ES (included in COCO archive) as a baseline
 
-**COCO concepts:**
+**COCO key concepts:**
 
 | Term | Meaning |
 |---|---|
 | `budget_multiplier` | Max evaluations = multiplier × dimension |
-| Target precision | f(x) − f\_opt < ∆f (solved when this holds) |
-| ECDF | Fraction of (function, instance, target) triples solved within budget |
-| ERT | Expected number of evaluations to hit a target, averaged over instances |
+| Target precision | f(x) − f\_opt < ∆f |
+| ECDF | Fraction of (function, instance, target) triples solved |
+| ERT | Expected evaluations to reach a target |
 
-**Why it matters:** ECDF plots are the standard figure in GECCO / CEC papers. Without COCO results, most surrogate papers will not pass peer review.
+**Why it matters:** ECDF plots are mandatory for GECCO/CEC papers. This is the experiment your paper's results section is built on.
 
 ---
 
-## Stage 13 — Analysis, Ablation, and Statistical Testing
+## Lesson 14 — Statistical Analysis and Paper Figures
 
 **What you will learn:** How to turn raw results into defensible scientific claims.
 
-- Ablation study: disable one component at a time, measure the drop in performance
-- Statistical significance: Wilcoxon signed-rank test (pairwise), Friedman test (multiple algorithms)
-- Effect size: not just "better" but "how much better"
-- Sensitivity analysis: how sensitive is performance to budget, kernel choice, acquisition function?
+- Ablation study: remove MC Dropout → compare to deterministic NN
+- Ablation: swap EI → random acquisition
+- Wilcoxon signed-rank test between NN-BO and GP-BO
+- Friedman test across all algorithms
+- Publication-quality figures: ECDF, convergence curves, box plots
 
-**What you will build:** `analysis/s13_stats.py`
-- Run each ablation (remove LHS → random init, swap EI → random, remove GP → random search)
-- Run Wilcoxon tests between each pair of algorithms
-- Output: LaTeX-ready table of means, standard deviations, and significance symbols (†, ‡)
+**What you will build:** `lesson-14/main.py`
+- All ablation runs
+- Statistical significance tests
+- LaTeX-ready results table with significance symbols (†, ‡)
 
-**Why it matters:** This is the section reviewers check to decide if your claims are credible. Without it, a paper will be rejected.
+**Why it matters:** Reviewers check this section first. Without statistical tests, claims of "better" will be rejected.
 
 ---
 
-## Stage 14 — Writing the Research Paper
+## Lesson 15 — Writing the Research Paper
 
-**Suggested paper structure:**
+**Paper structure:**
 
 ```
 1. Introduction
    ├── Problem: expensive black-box optimisation
-   ├── Motivation: each evaluation costs significant resources
-   ├── Proposed approach: surrogate-assisted optimisation
-   ├── Contribution: (what is new — your specific angle)
+   ├── Gap: GPs scale poorly; NNs lack uncertainty
+   ├── Contribution: NN surrogate with MC Dropout for BO
    └── Paper outline
 
 2. Background
-   ├── Problem statement and notation (Stage 1)
-   ├── Gaussian Processes (Stages 3–5)
-   └── Bayesian Optimisation (Stages 6–7)
+   ├── Black-box optimisation (Lesson 2)
+   ├── Surrogate-assisted optimisation (Lesson 3)
+   ├── Gaussian Processes (Lesson 6) — for comparison
+   └── Bayesian Optimisation loop (Lesson 8)
 
 3. Related Work
-   ├── Surrogate model comparison (Stage 8)
-   ├── Noisy optimisation (Stage 9)
-   ├── High-dimensional surrogates (Stage 10)
-   └── SAEA methods (Stage 11)
+   ├── GP-based BO (standard literature)
+   ├── Neural network surrogates (prior work)
+   ├── MC Dropout for uncertainty (Gal & Ghahramani 2016)
+   └── Deep ensembles (Lakshminarayanan 2017)
 
-4. Proposed Method
-   ├── Algorithm pseudocode
-   ├── Design choices and justification
-   └── Theoretical properties (if any)
+4. Proposed Method — NN Surrogate with MC Dropout
+   ├── Network architecture
+   ├── MC Dropout uncertainty derivation
+   ├── EI acquisition with NN
+   └── Full algorithm pseudocode
 
 5. Experimental Setup
-   ├── BBOB test suite description (Stage 12)
-   ├── Algorithms compared and configurations
-   └── Performance metrics: ERT, ECDF, best-so-far
+   ├── BBOB benchmark description (Lesson 13)
+   ├── Baselines: GP-BO, CMA-ES, random search
+   └── Metrics: ERT, ECDF, best-so-far
 
 6. Results and Discussion
-   ├── ECDF plots (Stage 12)
-   ├── Ablation study (Stage 13)
-   ├── Statistical significance (Stage 13)
-   └── Limitations
+   ├── ECDF plots — NN vs. GP vs. CMA-ES
+   ├── Ablation: MC Dropout vs. deterministic NN
+   ├── Scalability: NN vs. GP across dimensions
+   ├── Statistical significance (Lesson 14)
+   └── Limitations: NN needs more data than GP in low-d
 
 7. Conclusion and Future Work
+   └── Future: deep ensembles, Bayesian neural networks, multi-fidelity
 
 References
 ```
 
-**Possible paper angles** (pick one for a focused contribution):
-- New acquisition function or acquisition ensemble
-- Surrogate model comparison on BBOB (Stages 8 + 12)
-- BO vs. SAEA comparison (Stages 7, 11, 12)
-- Handling noise with GP (Stages 9 + 12 noisy variant)
-- ARD kernels for high-dimensional BBOB (Stages 10 + 12)
-
-**Target venues (ascending difficulty):**
+**Target venues:**
 - GECCO Workshop — most accessible, good for early work
 - CEC (Congress on Evolutionary Computation) — standard venue
-- GECCO Main Track — competitive, needs strong COCO results
+- GECCO Main Track — needs strong COCO results
 - PPSN (Parallel Problem Solving from Nature) — biennial, rigorous
-- NeurIPS / ICML — requires theoretical contribution
 
 ---
 
@@ -385,12 +397,12 @@ You should see `(.venv)` at the start of your terminal prompt — this confirms 
 pip install -r requirements.txt
 ```
 
-This installs everything needed for all lessons including the COCO benchmark (Lesson 13).
+This installs everything needed for all 15 lessons.
 
 ### 3. Verify the setup
 
 ```bash
-python -c "import numpy, scipy, matplotlib, sklearn; print('All good')"
+python -c "import numpy, scipy, matplotlib, sklearn, torch; print('All good')"
 ```
 
 ### 4. Launch Jupyter for notebook lessons
@@ -407,6 +419,8 @@ jupyter notebook
 deactivate
 ```
 
+---
+
 ## Dependencies
 
 | Package | Purpose | First used |
@@ -414,22 +428,35 @@ deactivate
 | `numpy` | Arrays, linear algebra | Lesson 1 |
 | `scipy` | Optimisers, statistics, LHS | Lesson 2 |
 | `matplotlib` | All plots | Lesson 1 |
-| `scikit-learn` | GP, Random Forest | Lesson 6 |
+| `scikit-learn` | GP baseline, Random Forest | Lesson 6 |
+| `torch` | Neural network surrogate (main model) | Lesson 9 |
+| `scikit-optimize` | Additional BO baseline | Lesson 11 |
 | `coco-experiment` | COCO experiment runner | Lesson 13 |
-| `cocopp` | COCO post-processing, ECDF | Lesson 13 |
+| `cocopp` | COCO post-processing, ECDF plots | Lesson 13 |
 | `cma` | CMA-ES baseline optimiser | Lesson 13 |
-| `scikit-optimize` | Additional BO baseline | Lesson 8 |
-| `torch` | Neural network surrogate | Lesson 9 |
+
+---
 
 ## Directory Structure
 
 ```
 learn-surrogate/
-├── basics/        # Stages 0–7:  foundations through BO loop
-├── surrogate/     # Stages 8–11: model comparison, noise, high-dim, SAEA
-├── benchmark/     # Stage 12:   COCO experiment runner
-├── analysis/      # Stage 13:   statistical tests and paper figures
-├── results/       # Plots and outputs (gitignored)
+├── lesson-1/          # Python and scientific computing basics
+├── lesson-2/          # Optimisation fundamentals
+├── lesson-3/          # First surrogate (polynomial)
+├── lesson-4/          # Statistics refresher
+├── lesson-5/          # Kernels
+├── lesson-6/          # GP regression (baseline)
+├── lesson-7/          # Acquisition functions
+├── lesson-8/          # BO loop with GP
+├── lesson-9/          # PyTorch basics
+├── lesson-10/         # NN surrogate — main contribution
+├── lesson-11/         # Model comparison
+├── lesson-12/         # Noise and high dimensions
+├── lesson-13/         # COCO benchmark
+├── lesson-14/         # Statistical analysis
+├── lesson-15/         # Paper writing guide
+├── results/           # Benchmark outputs (gitignored)
 └── requirements.txt
 ```
 
@@ -437,20 +464,21 @@ learn-surrogate/
 
 ## Key References
 
+**Neural Network Surrogates**
+- Snoek et al. (2015). Scalable and Accurate Deep Learning with Stochastic Depth
+- Springenberg et al. (2016). Bayesian Optimization with Robust Bayesian Neural Networks
+
+**MC Dropout for Uncertainty**
+- Gal & Ghahramani (2016). Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning
+
+**Deep Ensembles**
+- Lakshminarayanan et al. (2017). Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles
+
 **Bayesian Optimisation**
 - Frazier (2018). [A Tutorial on Bayesian Optimization](https://arxiv.org/abs/1807.02811)
-- Mockus (1975). On Bayesian Methods for Seeking the Extremum — original EI derivation
 
-**Gaussian Processes**
+**Gaussian Processes (Baseline)**
 - Rasmussen & Williams (2006). *Gaussian Processes for Machine Learning* — free PDF at gaussianprocess.org
-
-**Acquisition Functions**
-- Srinivas et al. (2010). Gaussian Process Optimization in the Bandit Setting — UCB theory
-
-**Surrogate-Assisted Evolutionary Algorithms**
-- Jin (2011). Surrogate-assisted evolutionary computation: Recent advances and future challenges. *Swarm and Evolutionary Computation*
-- Liu et al. (2020). A Gaussian Process Surrogate Model Assisted Evolutionary Algorithm for Medium Scale Expensive Optimization Problems
 
 **COCO Benchmark**
 - Hansen et al. (2021). [COCO: A Platform for Comparing Continuous Optimizers](https://arxiv.org/abs/1603.08785)
-- Hansen et al. BBOB function definitions — numbbo.github.io/coco/bbob
