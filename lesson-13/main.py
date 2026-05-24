@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.stats import norm, spearmanr
 from scipy.optimize import minimize
+from matplotlib.patches import Patch
 
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
@@ -11,11 +12,9 @@ rng = np.random.default_rng(RANDOM_SEED)
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Prescreening settings
-LAMBDA   = 20    # candidates generated per generation
-N_INIT   = 10    # initial LHS true evaluations
-N_ITER   = 40    # generations per run
-N_SEEDS  = 5     # seeds for sensitivity analysis
+N_INIT  = 5
+N_ITER  = 30
+N_SEEDS = 5
 
 
 # ── Benchmark ──────────────────────────────────────────────────────────────────
@@ -24,7 +23,7 @@ def forrester(x):
     x = np.asarray(x).ravel()
     return (6*x - 2)**2 * np.sin(12*x - 4)
 
-F_STAR = forrester(np.array([0.7572])).item()   # ≈ -6.021
+F_STAR = forrester(np.array([0.7572])).item()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -78,26 +77,21 @@ def fit_gp(X_tr, y_tr):
     return tuple(np.exp(res.x))
 
 
-# ── Prescreening BO loop ───────────────────────────────────────────────────────
+# ── SCR-enforced BO loop ───────────────────────────────────────────────────────
 
-def run_prescreening_bo(seed, scr_target=0.10, lambda_=LAMBDA, n_iter=N_ITER):
+def run_scr_bo(seed, scr_max=0.0, n_iter=N_ITER):
     """
-    Generation-based BO with prescreening.
+    BO with SCR ceiling enforced at each step.
 
-    Each generation:
-      1. Generate lambda_ candidate points (the pool)
-      2. Evaluate ALL lambda_ with the surrogate  → surrogate_calls += lambda_
-      3. Rank by EI; select top k = max(1, ceil(scr_target * lambda_))
-      4. Evaluate the top k with the TRUE function → true_calls += k
-      5. Add ONLY those k truly-evaluated points to the training dataset
+    Before accepting a surrogate prediction, the loop computes projected SCR:
+        projected_scr = (surr_calls + 1) / (true_calls + surr_calls + 1)
+    If projected_scr > scr_max, call the true function instead.
 
-    SCR = true_calls / (true_calls + surrogate_calls)   (target < 20%)
-
-    Only truly-evaluated points enter the dataset — no surrogate drift.
+    SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)
     """
-    rg   = np.random.default_rng(seed)
-    X    = lhs(N_INIT, 1, rg)
-    y    = np.array([eval_single(x) for x in X])
+    rg = np.random.default_rng(seed)
+    X  = lhs(N_INIT, 1, rg)
+    y  = np.array([eval_single(x) for x in X])
 
     true_calls = N_INIT
     surr_calls = 0
@@ -105,97 +99,91 @@ def run_prescreening_bo(seed, scr_target=0.10, lambda_=LAMBDA, n_iter=N_ITER):
 
     best_history = [best_true]
     true_history = [true_calls]
-    scr_history  = [true_calls / (true_calls + 1)]  # initial SCR ≈ 1 (all LHS are true)
-    k_per_gen    = []
-
-    k = max(1, int(np.ceil(scr_target * lambda_)))   # true evals per generation
+    scr_history  = [0.0]
+    eval_types   = []
 
     for _ in range(n_iter):
-        # Standardise on current true dataset
         Xm, Xs = float(X.mean()), float(X.std()) + 1e-8
         ym, ys = float(y.mean()), float(y.std()) + 1e-8
         X_std  = (X - Xm) / Xs
         y_std  = (y - ym) / ys
-
         l, sf, sn = fit_gp(X_std, y_std)
 
-        # Step 1–2: generate pool and evaluate ALL with surrogate
-        pool     = rg.uniform(0, 1, (lambda_, 1)).astype(np.float32)
-        pool_std = (pool - Xm) / Xs
-        mu_s, std_s = gp_predict(X_std, y_std, pool_std, l, sf, sn)
+        Xc     = rg.uniform(0, 1, (500, 1)).astype(np.float32)
+        Xc_std = (Xc - Xm) / Xs
+        mu_s, std_s = gp_predict(X_std, y_std, Xc_std, l, sf, sn)
         mu  = mu_s * ys + ym
         std = std_s * ys
-        surr_calls += lambda_
 
-        # Step 3: rank by EI, select top k
         ei      = acq_ei(mu, std, float(y.min()))
-        top_idx = np.argsort(ei)[-k:][::-1]   # top k by EI (descending)
+        idx     = int(np.argmax(ei))
+        x_next  = Xc[idx]
+        mu_next = float(mu[idx])
 
-        # Step 4–5: truly evaluate top k and add to dataset
-        for idx in top_idx:
-            x_next = pool[idx]
+        # SCR enforcer: use surrogate only if projected SCR stays within ceiling
+        proj_scr = (surr_calls + 1) / (true_calls + surr_calls + 1)
+        use_surr = (scr_max > 0.0) and (proj_scr <= scr_max)
+
+        if use_surr:
+            y_next = mu_next
+            surr_calls += 1
+            eval_types.append('surrogate')
+        else:
             y_next = eval_single(x_next)
             true_calls += 1
+            eval_types.append('true')
             best_true = min(best_true, y_next)
-            X = np.vstack([X, x_next])
-            y = np.append(y, y_next)
 
-        k_per_gen.append(k)
+        X = np.vstack([X, x_next])
+        y = np.append(y, y_next)
         best_history.append(best_true)
         true_history.append(true_calls)
-        scr_history.append(true_calls / (true_calls + surr_calls))
+        scr_history.append(surr_calls / (true_calls + surr_calls))
 
     return (np.array(best_history), np.array(true_history),
-            np.array(scr_history), k_per_gen)
+            np.array(scr_history), eval_types)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Part 1 — The prescreening model
+# Part 1 — SCR concept illustration
 # ════════════════════════════════════════════════════════════════════════════════
 
-def draw_prescreening_panel(ax, scr, lambda_=LAMBDA, title=''):
-    k = max(1, int(np.ceil(scr * lambda_)))
-    # Simulate surrogate ranking with some noise
-    rng2 = np.random.default_rng(0)
-    true_vals = rng2.uniform(-6, 5, lambda_)
-    noise     = rng2.normal(0, 1.0, lambda_)
-    surr_vals = true_vals + noise
-    ranked    = np.argsort(surr_vals)        # ascending = best first (minimisation)
-    colors    = ['seagreen' if i in ranked[:k] else '#cccccc' for i in range(lambda_)]
-    xs        = np.arange(1, lambda_ + 1)
-    ax.bar(xs, -surr_vals + surr_vals.max() + 1, color=colors, edgecolor='white', linewidth=0.5)
-    ax.axvline(ranked[k-1] + 1, color='red', lw=2, ls='--', alpha=0.7, label=f'cutoff (top {k})')
-    scr_real = k / (k + lambda_)
-    ax.set_title(f'{title}\n'
-                 f'λ={lambda_}, k={k} true evals\nSCR={scr_real*100:.0f}%  '
-                 f'{"✓ acceptable" if scr_real < 0.20 else "✗ TOO HIGH"}',
-                 fontsize=9)
-    ax.set_xlabel('Candidate (sorted by pool index)')
-    ax.set_yticks([])
-    ax.set_xlim(0, lambda_ + 1)
-    if scr_real >= 0.20:
-        ax.set_facecolor('#fff0f0')
+def illustrate_scr(scr, n_steps=25, seed=0):
+    rng2 = np.random.default_rng(seed)
+    true_c = 0; surr_c = 0; types = []
+    for _ in range(n_steps):
+        total = true_c + surr_c
+        proj  = (surr_c + 1) / (total + 1) if total > 0 else 0.0
+        if scr > 0 and proj <= scr:
+            surr_c += 1; types.append('surrogate')
+        else:
+            true_c += 1; types.append('true')
+    return types, true_c, surr_c
 
+n_show = 25
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-from matplotlib.patches import Patch
 
 for ax, scr, title in zip(axes,
-    [0.10, 0.20, 0.50],
-    ['SCR ≈ 10%\n(target)', 'SCR = 20%\n(ceiling)', 'SCR = 50%\n(professor\'s complaint)']):
-    draw_prescreening_panel(ax, scr, title=title)
+    [0.0, 0.20, 0.40],
+    ['SCR = 0%\n(pure BO)', 'SCR = 20%', 'SCR = 40%']):
+    types, n_true, n_surr = illustrate_scr(scr, n_show)
+    colors = ['seagreen' if t == 'true' else 'darkorange' for t in types]
+    ax.bar(range(1, n_show+1), [1]*n_show, color=colors, edgecolor='white', linewidth=0.5)
+    ax.set_title(f'{title}\n{n_true} true  |  {n_surr} surrogate', fontsize=10)
+    ax.set_xlabel('BO iteration')
+    ax.set_yticks([])
+    ax.set_xlim(0, n_show + 1)
 
 axes[0].legend(handles=[Patch(color='seagreen', label='True function call'),
-                         Patch(color='#cccccc', label='Surrogate-only (discarded)')],
+                         Patch(color='darkorange', label='Surrogate-only')],
                fontsize=8)
-
-plt.suptitle('Prescreening: generate λ candidates → evaluate ALL with surrogate → '
-             'select top k for true evaluation\n'
-             'SCR = true_calls / (true_calls + surrogate_calls)   must be < 20%',
+plt.suptitle('SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)\n'
+             'Green = true evaluation,  Orange = surrogate-only (no f call made)',
              fontsize=11)
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'part1_prescreening_concept.png', dpi=150)
+plt.savefig(OUTPUT_DIR / 'part1_scr_concept.png', dpi=150)
 plt.close()
-print("Saved: part1_prescreening_concept.png")
+print("Saved: part1_scr_concept.png")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -211,47 +199,35 @@ X_tr_s  = (X_tr_np - Xm_t) / Xs_t
 y_tr_s  = (y_tr_np - ym_t) / ys_t
 l_t, sf_t, sn_t = fit_gp(X_tr_s, y_tr_s)
 
-n_pool   = 50
-X_pool   = rng.uniform(0, 1, (n_pool, 1)).astype(np.float32)
-y_true_p = forrester(X_pool.ravel())
-Xp_s     = (X_pool - Xm_t) / Xs_t
-mu_p_s, _ = gp_predict(X_tr_s, y_tr_s, Xp_s, l_t, sf_t, sn_t)
-mu_p     = mu_p_s * ys_t + ym_t
+n_cand   = 40
+X_cand   = rng.uniform(0, 1, (n_cand, 1)).astype(np.float32)
+y_true_c = forrester(X_cand.ravel())
+Xc_s     = (X_cand - Xm_t) / Xs_t
+mu_c_s, _ = gp_predict(X_tr_s, y_tr_s, Xc_s, l_t, sf_t, sn_t)
+mu_c     = mu_c_s * ys_t + ym_t
 
-rho, pval    = spearmanr(y_true_p, mu_p)
-true_ranks   = y_true_p.argsort().argsort() + 1
-surr_ranks   = mu_p.argsort().argsort() + 1
+rho, pval    = spearmanr(y_true_c, mu_c)
+true_ranks   = y_true_c.argsort().argsort() + 1
+surr_ranks   = mu_c.argsort().argsort() + 1
 
-# What fraction of the true top-10 does the surrogate find if k=5 or k=10?
-k_vals   = [2, 5, 10]
-true_top = set(np.argsort(y_true_p)[:10])
-surr_sorted = np.argsort(mu_p)
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-
-axes[0].scatter(y_true_p, mu_p, color='steelblue', s=60, alpha=0.8, zorder=3)
-lims = [min(y_true_p.min(), mu_p.min())-0.5, max(y_true_p.max(), mu_p.max())+0.5]
+axes[0].scatter(y_true_c, mu_c, color='steelblue', s=60, alpha=0.8, zorder=3)
+lims = [min(y_true_c.min(), mu_c.min())-0.5, max(y_true_c.max(), mu_c.max())+0.5]
 axes[0].plot(lims, lims, 'k--', lw=1.5, alpha=0.5, label='Perfect prediction')
 axes[0].set_title(f'Surrogate μ vs. true f(x)\nSpearman ρ = {rho:.3f}  (p = {pval:.2e})')
 axes[0].set_xlabel('True f(x)'); axes[0].set_ylabel('Surrogate μ(x)')
 axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3)
 
 axes[1].scatter(true_ranks, surr_ranks, color='tomato', s=60, alpha=0.8, zorder=3)
-axes[1].plot([1, n_pool], [1, n_pool], 'k--', lw=1.5, alpha=0.5, label='Perfect ranking')
-for k_show in k_vals:
-    selected = set(surr_sorted[:k_show])
-    hit = len(selected & true_top)
-    axes[1].axvline(k_show, color='gray', lw=0.8, ls=':', alpha=0.6)
-    axes[1].text(k_show+0.3, n_pool-3, f'k={k_show}: {hit}/10 hits',
-                 fontsize=7, color='gray')
-axes[1].set_title(f'Rank comparison — {n_pool} pool candidates\n'
-                  f'ρ = {rho:.3f}  →  prescreening is '
-                  f'{"trustworthy" if rho > 0.7 else "UNRELIABLE"}')
+axes[1].plot([1, n_cand], [1, n_cand], 'k--', lw=1.5, alpha=0.5, label='Perfect ranking')
+axes[1].set_title(f'Rank comparison — {n_cand} candidates\n'
+                  f'ρ = {rho:.3f}  → {"safe to prescreen" if rho > 0.7 else "ranking unreliable"}')
 axes[1].set_xlabel('True rank (1 = best)'); axes[1].set_ylabel('Surrogate rank')
 axes[1].legend(fontsize=8); axes[1].grid(True, alpha=0.3)
 
-plt.suptitle('Rank correlation: can the surrogate correctly rank candidates?\n'
-             'High ρ → low SCR is safe; low ρ → the surrogate may discard the true best',
+plt.suptitle('Part 2 — Rank correlation: can the surrogate correctly order candidates?\n'
+             'High ρ → prescreening is trustworthy → moderate SCR is safer',
              fontsize=11)
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'part2_rank_correlation.png', dpi=150)
@@ -260,41 +236,33 @@ print(f"Saved: part2_rank_correlation.png  (Spearman ρ = {rho:.3f})")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Part 3 — Live SCR tracker (single run, SCR target = 10%)
+# Part 3 — Live SCR tracker during BO
 # ════════════════════════════════════════════════════════════════════════════════
 
-best3, true3, scr3, k3 = run_prescreening_bo(seed=RANDOM_SEED, scr_target=0.10)
-gens = np.arange(len(scr3))
+best3, true3, scr3, etypes3 = run_scr_bo(seed=RANDOM_SEED, scr_max=0.20)
 
-fig, axes = plt.subplots(3, 1, figsize=(12, 9), sharex=True)
+step_colors = ['seagreen' if t == 'true' else 'darkorange' for t in etypes3]
+iters       = np.arange(1, N_ITER + 1)
 
-# True evaluations added per generation
-k3_arr = np.array([0] + k3)
-axes[0].bar(gens[1:], k3, color='seagreen', edgecolor='white', linewidth=0.5, label='True evals this gen')
-axes[0].bar(gens[1:], [LAMBDA]*N_ITER, bottom=k3, color='#d0d0d0',
-            edgecolor='white', linewidth=0.5, label='Surrogate-only (pool)')
-axes[0].set_title(f'Evaluations per generation: {LAMBDA} total, {k3[0]} truly evaluated\n'
-                  f'Surrogate handles {LAMBDA - k3[0]}/{LAMBDA} = '
-                  f'{(LAMBDA - k3[0])/LAMBDA*100:.0f}% of each generation')
-axes[0].set_ylabel('Evaluations')
-axes[0].legend(fontsize=8)
+fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
 
-# Cumulative true calls
-axes[1].plot(gens, true3, color='steelblue', lw=2.5, label='Cumulative true calls')
-axes[1].fill_between(gens, 0, true3, alpha=0.2, color='steelblue')
-axes[1].set_title('Cumulative true function calls (COCO budget counter)')
-axes[1].set_ylabel('True calls'); axes[1].legend(fontsize=8); axes[1].grid(True, alpha=0.3)
+axes[0].bar(iters, [1]*N_ITER, color=step_colors, edgecolor='white', linewidth=0.5)
+axes[0].set_yticks([])
+axes[0].set_title(f'Evaluation pattern: SCR ceiling = 20%  '
+                  f'({etypes3.count("true")} true,  {etypes3.count("surrogate")} surrogate-only)')
+axes[0].legend(handles=[Patch(color='seagreen', label='True call'),
+                         Patch(color='darkorange', label='Surrogate-only')],
+               fontsize=8)
 
-# Running SCR
-axes[2].plot(gens, scr3 * 100, color='tomato', lw=2.5, label='Running SCR (%)')
-axes[2].axhline(20, color='black', ls='--', lw=1.5, label='20% ceiling')
-axes[2].fill_between(gens, 0, scr3 * 100, alpha=0.2, color='tomato')
-axes[2].set_ylabel('SCR (%)'); axes[2].set_xlabel('Generation')
-axes[2].set_title('Running SCR converges well below 20% ceiling')
-axes[2].set_ylim(0, 60); axes[2].legend(fontsize=8); axes[2].grid(True, alpha=0.3)
+axes[1].plot(range(N_ITER+1), scr3*100, color='tomato', lw=2.5, label='Running SCR (%)')
+axes[1].axhline(20, color='black', ls='--', lw=1.5, label='20% ceiling')
+axes[1].fill_between(range(N_ITER+1), 0, scr3*100, alpha=0.2, color='tomato')
+axes[1].set_ylabel('SCR (%)'); axes[1].set_xlabel('BO iteration')
+axes[1].set_title('Running SCR — enforcer keeps it at or below 20%')
+axes[1].set_ylim(0, 35); axes[1].legend(fontsize=8); axes[1].grid(True, alpha=0.3)
 
-plt.suptitle(f'Prescreening BO with SCR target = 10%\n'
-             f'λ = {LAMBDA} pool, k = {k3[0]} true evals/gen  →  final SCR = {scr3[-1]*100:.1f}%',
+plt.suptitle('Part 3 — SCR-controlled BO: the enforcer decides at each step\n'
+             '"Can I use the surrogate this time, or must I call the true function?"',
              fontsize=11)
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'part3_scr_tracker.png', dpi=150)
@@ -306,51 +274,46 @@ print(f"Saved: part3_scr_tracker.png  (final SCR = {scr3[-1]*100:.1f}%)")
 # Part 4 — SCR sensitivity: convergence per TRUE evaluation
 # ════════════════════════════════════════════════════════════════════════════════
 
-print("Running SCR sensitivity analysis...")
-# Note: SCR=1.0 means k=lambda_ → every candidate truly evaluated (no surrogate saving)
-scr_settings = [0.05, 0.10, 0.20, 0.50, 1.00]
-scr_names    = ['SCR 5%', 'SCR 10%', 'SCR 20%', 'SCR 50% (bad)', 'SCR 100% (no surrogate)']
-colors5      = ['steelblue', 'seagreen', 'darkorange', 'tomato', 'purple']
+scr_settings = [0.0, 0.10, 0.20, 0.40]
+scr_names    = ['SCR 0%', 'SCR 10%', 'SCR 20%', 'SCR 40%']
+colors4      = ['steelblue', 'seagreen', 'darkorange', 'tomato']
 
-results5 = {}
+print("Running SCR sensitivity analysis...")
+results4 = {}
 for scr in scr_settings:
-    k = max(1, int(np.ceil(scr * LAMBDA)))
     runs = []
     for seed in range(N_SEEDS):
-        best_h, true_h, _, _ = run_prescreening_bo(seed=seed, scr_target=scr)
+        best_h, true_h, _, _ = run_scr_bo(seed=seed, scr_max=scr, n_iter=N_ITER)
         runs.append((best_h, true_h))
-    results5[scr] = runs
-    print(f"  SCR={scr*100:.0f}%  k={k}  done")
+    results4[scr] = runs
+print("Done.")
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-# Left: best true f vs. generation
-for scr, label, color in zip(scr_settings, scr_names, colors5):
-    bests = np.array([r[0] for r in results5[scr]])
-    m = bests.mean(0)
-    ls = '--' if scr >= 0.50 else '-'
-    axes[0].plot(range(N_ITER+1), m, color=color, lw=2.5, ls=ls, label=label)
-axes[0].axhline(F_STAR, color='black', ls=':', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
-axes[0].set_title(f'Best true f found vs. generation\nmean over {N_SEEDS} seeds')
-axes[0].set_xlabel('Generation'); axes[0].set_ylabel('Best f(x) found')
-axes[0].legend(fontsize=7); axes[0].grid(True, alpha=0.3)
+for scr, label, color in zip(scr_settings, scr_names, colors4):
+    bests = np.array([r[0] for r in results4[scr]])
+    m = bests.mean(0); s = bests.std(0)
+    axes[0].plot(range(N_ITER+1), m, color=color, lw=2.5, label=label)
+    axes[0].fill_between(range(N_ITER+1), m-s, m+s, alpha=0.15, color=color)
+axes[0].axhline(F_STAR, color='black', ls='--', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
+axes[0].set_title(f'Best true f found — mean ± std over {N_SEEDS} seeds')
+axes[0].set_xlabel('BO iteration'); axes[0].set_ylabel('Best f(x) found')
+axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3)
 
-# Right: best true f vs. TRUE evaluations (the COCO-correct comparison)
-for scr, label, color in zip(scr_settings, scr_names, colors5):
-    ls = '--' if scr >= 0.50 else '-'
-    for i, (best_h, true_h) in enumerate(results5[scr]):
-        axes[1].step(true_h, best_h, color=color, lw=1.5, alpha=0.4, where='post',
-                     label=label if i == 0 else None, ls=ls)
-axes[1].axhline(F_STAR, color='black', ls=':', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
-axes[1].set_title('Convergence per TRUE evaluation (COCO-correct x-axis)\n'
-                  'SCR 50–100% wastes true-eval budget; SCR 10–20% is efficient')
-axes[1].set_xlabel('True function calls (COCO budget)'); axes[1].set_ylabel('Best true f(x)')
+for scr, label, color in zip(scr_settings, scr_names, colors4):
+    for i, (best_h, true_h) in enumerate(results4[scr]):
+        axes[1].step(true_h, best_h, color=color, lw=1.5,
+                     alpha=0.3 if i > 0 else 0.9, where='post',
+                     label=label if i == 0 else None)
+axes[1].axhline(F_STAR, color='black', ls='--', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
+axes[1].set_title('Same convergence — x-axis = TRUE evaluations only\n'
+                  'High SCR = fewer true evals = curve shifts right')
+axes[1].set_xlabel('True function calls (COCO budget)')
+axes[1].set_ylabel('Best true f(x) found')
 axes[1].legend(fontsize=7); axes[1].grid(True, alpha=0.3)
 
-# Annotate the "bad zone"
-axes[1].axvspan(axes[1].get_xlim()[0], axes[1].get_xlim()[1], alpha=0)  # force lim first
-plt.suptitle('SCR sensitivity on Forrester — lower SCR = more surrogate saves per true eval\n'
-             'SCR ≥ 50% is the professor\'s complaint: too many expensive evaluations',
+plt.suptitle('Part 4 — SCR sensitivity: convergence per true evaluation\n'
+             'SCR 0% is the baseline; moderate SCR is nearly free; high SCR can drift',
              fontsize=11)
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'part4_scr_sensitivity.png', dpi=150)
@@ -359,48 +322,47 @@ print("Saved: part4_scr_sensitivity.png")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Part 5 — Budget breakdown after N_ITER generations
+# Part 5 — Budget allocation for each SCR
 # ════════════════════════════════════════════════════════════════════════════════
-
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
 true_counts = []
 surr_counts = []
-realized_scrs = []
-
 for scr in scr_settings:
-    k = max(1, int(np.ceil(scr * LAMBDA)))
-    tc = N_INIT + k * N_ITER      # true calls: N_INIT LHS + k per generation
-    sc = LAMBDA * N_ITER           # surrogate calls: lambda_ per generation
-    true_counts.append(tc)
-    surr_counts.append(sc)
-    realized_scrs.append(tc / (tc + sc) * 100)
+    _, _, _, etypes = run_scr_bo(seed=0, scr_max=scr, n_iter=N_ITER)
+    true_counts.append(etypes.count('true'))
+    surr_counts.append(etypes.count('surrogate'))
 
-x5 = np.arange(len(scr_settings))
-axes[0].bar(x5, true_counts, color='seagreen', edgecolor='black', alpha=0.85, label='True f calls')
-axes[0].bar(x5, surr_counts, bottom=true_counts, color='#d0d0d0',
-            edgecolor='black', alpha=0.85, label=f'Surrogate calls (λ×{N_ITER}={LAMBDA*N_ITER})')
-axes[0].set_xticks(x5); axes[0].set_xticklabels(scr_names, fontsize=8)
-axes[0].set_title(f'Budget after {N_ITER} generations\nSurrogate pool always = {LAMBDA*N_ITER} calls')
-axes[0].set_ylabel('Total evaluations'); axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3, axis='y')
+x4 = np.arange(len(scr_settings))
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+axes[0].bar(x4, true_counts, color='seagreen', edgecolor='black', alpha=0.85,
+            label='True function calls')
+axes[0].bar(x4, surr_counts, bottom=true_counts, color='darkorange',
+            edgecolor='black', alpha=0.85, label='Surrogate-only')
+axes[0].set_xticks(x4); axes[0].set_xticklabels(scr_names)
+axes[0].set_title(f'Budget after {N_ITER} BO iterations\nTotal iterations = same for all')
+axes[0].set_ylabel('Evaluations'); axes[0].legend(fontsize=8)
+axes[0].grid(True, alpha=0.3, axis='y')
 for i, (t, s) in enumerate(zip(true_counts, surr_counts)):
-    axes[0].text(i, t/2, str(t), ha='center', va='center', fontsize=9, fontweight='bold', color='white')
+    axes[0].text(i, t/2, str(t), ha='center', va='center',
+                 fontsize=11, fontweight='bold', color='white')
+    if s > 0:
+        axes[0].text(i, t + s/2, str(s), ha='center', va='center',
+                     fontsize=11, fontweight='bold', color='white')
 
-bar_colors = ['seagreen' if r < 20 else ('darkorange' if r < 40 else 'tomato') for r in realized_scrs]
-bars = axes[1].bar(x5, realized_scrs, color=bar_colors, edgecolor='black', alpha=0.9)
-axes[1].axhline(20, color='black', ls='--', lw=2, label='20% ceiling')
-axes[1].axhspan(20, 110, alpha=0.07, color='red', label='Unacceptable zone')
-axes[1].set_xticks(x5); axes[1].set_xticklabels(scr_names, fontsize=8)
-axes[1].set_title('Realized SCR — anything ≥ 20% is unacceptable\n'
-                  'Professor\'s point: >50% is far too high')
-axes[1].set_ylabel('Realized SCR (%)'); axes[1].set_ylim(0, 110)
+realized_scr = [s/(t+s)*100 if (t+s) > 0 else 0
+                for t, s in zip(true_counts, surr_counts)]
+bars = axes[1].bar(x4, realized_scr, color=colors4, edgecolor='black', alpha=0.85)
+axes[1].axhline(20, color='black', ls='--', lw=2, label='20% ceiling (COCO limit)')
+axes[1].set_xticks(x4); axes[1].set_xticklabels(scr_names)
+axes[1].set_title('Realized SCR — must stay ≤ 20% for valid experiments')
+axes[1].set_ylabel('Realized SCR (%)')
 axes[1].legend(fontsize=8); axes[1].grid(True, alpha=0.3, axis='y')
-for bar, v in zip(bars, realized_scrs):
-    axes[1].text(bar.get_x()+bar.get_width()/2, v+1.5, f'{v:.1f}%',
-                 ha='center', fontsize=9, fontweight='bold')
+for bar, v in zip(bars, realized_scr):
+    axes[1].text(bar.get_x() + bar.get_width()/2, v + 0.5, f'{v:.1f}%',
+                 ha='center', fontsize=10, fontweight='bold')
 
-plt.suptitle('Budget allocation: the lower the SCR, the more the surrogate saves\n'
-             f'All runs use the same surrogate pool ({LAMBDA*N_ITER} calls); only true calls change',
+plt.suptitle('Part 5 — Budget allocation: how many evaluations are truly expensive?',
              fontsize=11)
 plt.tight_layout()
 plt.savefig(OUTPUT_DIR / 'part5_budget_breakdown.png', dpi=150)
@@ -409,27 +371,21 @@ print("Saved: part5_budget_breakdown.png")
 
 
 # ════════════════════════════════════════════════════════════════════════════════
-# Part 6 — COCO-compatible prescreening BO (true-eval budget, SCR ≤ 20%)
+# Part 6 — COCO-compatible BO with true-eval budget
 # ════════════════════════════════════════════════════════════════════════════════
 
-def run_coco_prescreening(seed, true_budget=50, scr_target=0.10, lambda_=LAMBDA):
+def run_coco_bo(seed, true_budget=30, scr_max=0.20):
     """
-    Prescreening BO with a hard TRUE-EVALUATION budget.
+    BO with a hard TRUE-EVALUATION budget.
     Stops when true_budget true function calls have been made.
-    SCR target enforced by k = ceil(scr_target * lambda_).
+    SCR enforcer applied at each step.
     """
     rg = np.random.default_rng(seed)
     X  = lhs(N_INIT, 1, rg)
     y  = np.array([eval_single(x) for x in X])
-
-    true_calls = N_INIT
-    surr_calls = 0
+    true_calls = N_INIT; surr_calls = 0
     best_true  = float(y.min())
-
-    true_axis = [true_calls]
-    best_axis = [best_true]
-
-    k = max(1, int(np.ceil(scr_target * lambda_)))
+    true_axis  = [true_calls]; best_axis = [best_true]
 
     while true_calls < true_budget:
         Xm, Xs = float(X.mean()), float(X.std()) + 1e-8
@@ -438,91 +394,73 @@ def run_coco_prescreening(seed, true_budget=50, scr_target=0.10, lambda_=LAMBDA)
         y_std  = (y - ym) / ys
         l, sf, sn = fit_gp(X_std, y_std)
 
-        pool     = rg.uniform(0, 1, (lambda_, 1)).astype(np.float32)
-        pool_std = (pool - Xm) / Xs
-        mu_s, std_s = gp_predict(X_std, y_std, pool_std, l, sf, sn)
+        Xc     = rg.uniform(0, 1, (500, 1)).astype(np.float32)
+        Xc_std = (Xc - Xm) / Xs
+        mu_s, std_s = gp_predict(X_std, y_std, Xc_std, l, sf, sn)
         mu  = mu_s * ys + ym
         std = std_s * ys
-        surr_calls += lambda_
 
-        ei      = acq_ei(mu, std, float(y.min()))
-        top_idx = np.argsort(ei)[-k:][::-1]
+        ei  = acq_ei(mu, std, float(y.min()))
+        idx = int(np.argmax(ei))
+        x_next  = Xc[idx]
+        mu_next = float(mu[idx])
 
-        for idx in top_idx:
-            if true_calls >= true_budget:
-                break
-            x_next = pool[idx]
-            y_next = eval_single(x_next)
-            true_calls += 1
+        proj_scr = (surr_calls + 1) / (true_calls + surr_calls + 1)
+        use_surr = (scr_max > 0.0) and (proj_scr <= scr_max)
+
+        if use_surr:
+            y_next = mu_next; surr_calls += 1
+        else:
+            y_next = eval_single(x_next); true_calls += 1
             best_true = min(best_true, y_next)
-            X = np.vstack([X, x_next])
-            y = np.append(y, y_next)
-            true_axis.append(true_calls)
-            best_axis.append(best_true)
+            true_axis.append(true_calls); best_axis.append(best_true)
 
-    return np.array(true_axis), np.array(best_axis), surr_calls
+        X = np.vstack([X, x_next]); y = np.append(y, y_next)
 
-TRUE_BUDGET = 50
-print(f"\nRunning COCO-compatible prescreening BO (budget = {TRUE_BUDGET} true evals)...")
+    return np.array(true_axis), np.array(best_axis)
+
+TRUE_BUDGET = 30
+print(f"\nRunning COCO-compatible BO (budget = {TRUE_BUDGET} true evals)...")
 
 fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-compare_scrs = [0.10, 0.20, 1.00]
-compare_labels = ['SCR 10% (target)', 'SCR 20% (ceiling)', 'SCR 100% (no surrogate)']
-compare_colors = ['seagreen', 'darkorange', 'tomato']
-
-for scr, label, color in zip(compare_scrs, compare_labels, compare_colors):
+for scr, label, color in zip([0.0, 0.20], ['SCR 0% (pure BO)', 'SCR 20%'],
+                               ['steelblue', 'darkorange']):
     for seed in range(N_SEEDS):
-        t_ax, b_ax, sc = run_coco_prescreening(seed=seed, true_budget=TRUE_BUDGET, scr_target=scr)
-        ls = '--' if scr >= 1.0 else '-'
+        t_ax, b_ax = run_coco_bo(seed=seed, true_budget=TRUE_BUDGET, scr_max=scr)
         axes[0].step(t_ax, b_ax, color=color, lw=1.5, alpha=0.5, where='post',
-                     label=label if seed == 0 else None, ls=ls)
-
-axes[0].axhline(F_STAR, color='black', ls=':', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
+                     label=label if seed == 0 else None)
+axes[0].axhline(F_STAR, color='black', ls='--', lw=1.5, label=f'f* ≈ {F_STAR:.3f}')
 axes[0].axvline(TRUE_BUDGET, color='gray', ls=':', lw=1.2, label=f'Budget = {TRUE_BUDGET}')
-axes[0].set_title(f'COCO-compatible convergence\nBudget = {TRUE_BUDGET} TRUE function calls')
+axes[0].set_title(f'COCO-compatible convergence\nBudget = {TRUE_BUDGET} TRUE evaluations')
 axes[0].set_xlabel('True function calls (COCO budget counter)')
-axes[0].set_ylabel('Best f(x) found'); axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3)
+axes[0].set_ylabel('Best f(x) found')
+axes[0].legend(fontsize=8); axes[0].grid(True, alpha=0.3)
 
-# Gap to optimum log scale
-for scr, label, color in zip(compare_scrs, compare_labels, compare_colors):
-    all_gaps = []
+for scr, label, color in zip([0.0, 0.20], ['SCR 0%', 'SCR 20%'],
+                               ['steelblue', 'darkorange']):
     for seed in range(N_SEEDS):
-        t_ax, b_ax, _ = run_coco_prescreening(seed=seed, true_budget=TRUE_BUDGET, scr_target=scr)
+        t_ax, b_ax = run_coco_bo(seed=seed, true_budget=TRUE_BUDGET, scr_max=scr)
         gap = np.maximum(b_ax - F_STAR, 1e-4)
-        ls  = '--' if scr >= 1.0 else '-'
-        axes[1].step(t_ax, gap, color=color, lw=1.2, alpha=0.4, where='post', ls=ls,
+        axes[1].step(t_ax, gap, color=color, lw=1, alpha=0.4, where='post',
                      label=label if seed == 0 else None)
 axes[1].set_yscale('log')
-axes[1].set_title('Gap to optimum — log scale\n'
-                  'SCR 10% finds near-optimal solution using far fewer true calls')
-axes[1].set_xlabel('True function calls'); axes[1].set_ylabel('gap = best_f − f* (log)')
+axes[1].set_title('Gap to optimum — log scale')
+axes[1].set_xlabel('True function calls')
+axes[1].set_ylabel('gap = best_f − f* (log)')
 axes[1].legend(fontsize=8); axes[1].grid(True, alpha=0.3, which='both')
 
-plt.suptitle(f'COCO-compatible prescreening BO\n'
-             f'λ = {LAMBDA} pool per generation, hard budget = {TRUE_BUDGET} true evaluations',
+plt.suptitle(f'Part 6 — COCO-compatible BO — x-axis counts ONLY true function calls\n'
+             f'This is the correct form for Lesson 16 COCO benchmarking',
              fontsize=11)
 plt.tight_layout()
-plt.savefig(OUTPUT_DIR / 'part6_coco_prescreening.png', dpi=150)
+plt.savefig(OUTPUT_DIR / 'part6_coco_bo.png', dpi=150)
 plt.close()
-print("Saved: part6_coco_prescreening.png")
-
-# Print final SCR summary
-print("\nFinal SCR summary:")
-print(f"  {'Setting':<20}  {'k/gen':>5}  {'True calls':>10}  {'Surr calls':>10}  {'SCR':>7}")
-for scr in scr_settings:
-    k = max(1, int(np.ceil(scr * LAMBDA)))
-    tc = N_INIT + k * N_ITER
-    sc = LAMBDA * N_ITER
-    r  = tc / (tc + sc) * 100
-    ok = "✓" if r < 20 else "✗"
-    print(f"  {scr*100:.0f}%{'':<17}  {k:>5}  {tc:>10}  {sc:>10}  {r:>6.1f}% {ok}")
+print("Saved: part6_coco_bo.png")
 
 print("\nAll done. Check lesson-13/output/ for plots.")
 print("\nKey takeaways:")
-print("  CORRECT:  SCR = true_calls / (true_calls + surrogate_calls) < 20%")
-print("  The surrogate must handle 80%+ of evaluations — not 20%")
-print("  Prescreening: generate λ pool, evaluate ALL with surrogate,")
-print("                select top k (k/λ < 20%) for true evaluation")
-print("  Only truly-evaluated points enter the training dataset (no drift)")
-print("  SCR ≥ 50% is the professor's complaint — far too many true evals")
+print("  SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)")
+print("  SCR must stay ≤ 20% to avoid surrogate drift")
+print("  The enforcer checks projected SCR before each step")
+print("  COCO x-axis = true function calls only (surrogate calls are free)")

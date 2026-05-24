@@ -2,33 +2,32 @@
 
 ## Objective
 
-Understand the correct definition of SCR, implement a generation-based prescreening loop that keeps SCR below 20%, and see why evaluating the true function in more than 20–50% of points is unacceptable in surrogate-assisted black-box optimisation.
+Understand what SCR is, why it must stay below 20% for valid surrogate-assisted optimisation, and implement an SCR enforcer inside the BO loop.
 
 ---
 
 ## Core definition
 
 ```
-SCR = true_function_calls / (true_function_calls + surrogate_calls)
+SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)
 ```
 
-- **SCR must be < 20%** — the expensive true function is called in at most 1 in 5 evaluations
-- The surrogate handles the remaining 80%+ of evaluations (cheap predictions)
-- The surrogate **saves** real evaluations; without control it does not
+- **SCR = 0%** — pure BO: every accepted point is truly evaluated
+- **SCR = 20%** — 1 in 5 evaluations uses the surrogate prediction as fitness (saves 1 true eval per 5 steps)
+- **SCR > 20%** — risky: training on too many surrogate-predicted y values causes surrogate drift
 
-### Common mistake
-A naive BO loop that calls the true function for every accepted point has SCR ≈ 100% — the surrogate guides search but saves nothing. This is "surrogate-assisted" in name only.
+### Why SCR must be controlled
+If the surrogate's prediction `μ(x)` is used as the fitness value `y` and that point is added back to the training dataset, the surrogate then trains on its own errors. Over many steps this causes **surrogate drift** — the model becomes increasingly inaccurate while appearing confident.
 
 ---
 
 ## Concepts
 
-- **Prescreening** — generate a large pool of λ candidates, evaluate ALL with the surrogate (cheap), select only the top k by surrogate ranking for true evaluation; SCR = k / (k + λ)
-- **Pool size λ** — how many candidates are generated and surrogate-evaluated per generation
-- **Selection count k** — how many candidates are truly evaluated; k = ceil(SCR_target × λ)
-- **Rank correlation** — Spearman ρ between surrogate ranking and true ranking; high ρ means prescreening is trustworthy; low ρ means the surrogate may discard the true best candidate
-- **Surrogate drift** — if surrogate-predicted y values are added back as training data, the surrogate trains on its own errors; avoid by only adding truly-evaluated points to the dataset
-- **COCO budget** — measured in true function calls only; SCR controls how efficiently each true call is used; lower SCR = more budget saved
+- **SCR enforcer** — before each BO step, check: "if I use the surrogate now, will SCR exceed the ceiling?" If yes → call the true function
+- **Projected SCR** — `(surr_calls + 1) / (true_calls + surr_calls + 1)`; compare to `scr_max` before deciding
+- **Rank correlation** — Spearman ρ between surrogate ranking and true ranking; high ρ means prescreening is trustworthy
+- **Surrogate drift** — if surrogate-predicted y values are added back as training data, the surrogate trains on its own errors
+- **COCO budget** — measured in true function calls only; SCR controls how efficiently each true call is used
 
 ---
 
@@ -37,7 +36,7 @@ A naive BO loop that calls the true function for every accepted point has SCR �
 | File | Purpose |
 |---|---|
 | `README.md` | This file |
-| `notebook.ipynb` | Interactive — change SCR and λ, compare convergence per true eval |
+| `notebook.ipynb` | Interactive — change SCR ceiling, compare convergence per true eval |
 | `main.py` | Standalone script — saves all plots to `output/` |
 
 ---
@@ -62,31 +61,31 @@ jupyter notebook lesson-13/notebook.ipynb
 
 ## What You Will Build
 
-### Part 1 — The prescreening model
-Illustrate the generation-based loop: λ candidates → all surrogate-evaluated → top k truly evaluated. Show SCR for three settings: 10%, 20%, 50% (bad). Visualise which candidates receive true vs. surrogate evaluation.
+### Part 1 — The SCR concept
+Illustrate how the enforcer distributes true vs. surrogate calls across 25 BO steps for three SCR ceilings: 0%, 20%, 40%. Show which steps call the true function (green) and which use the surrogate (orange).
 
 ### Part 2 — Surrogate ranking quality
-Generate 50 candidates, evaluate all with both the true function and the GP. Plot Spearman rank correlation ρ. High ρ is the prerequisite for low SCR: the surrogate must correctly identify the top k without true evaluations.
+Generate 40 candidates, evaluate all with both the true function and the GP. Plot Spearman rank correlation ρ. High ρ is the prerequisite for trusting the surrogate's ranking when SCR > 0.
 
-### Part 3 — SCR-controlled prescreening loop
-Implement the prescreening BO: λ=20 candidates per generation, k = ceil(SCR × λ) true evaluations. Track true calls, surrogate calls, and running SCR per generation. Show the enforcer keeping SCR ≤ 20%.
+### Part 3 — SCR-controlled BO
+Run a single BO with SCR ceiling = 20%. Track and plot the running SCR at each step. Show the enforcer keeping it at or below the ceiling.
 
 ### Part 4 — SCR sensitivity: convergence per true evaluation
-Run the prescreening loop at SCR = 5%, 10%, 20%, 50%, 100%. X-axis = true function calls. Show that SCR = 50–100% wastes budget; SCR = 10–20% is the efficient operating zone.
+Run the BO at SCR = 0%, 10%, 20%, 40%. X-axis = true function calls (COCO budget). Show that moderate SCR (10–20%) is nearly as good as pure BO but uses fewer true evaluations.
 
 ### Part 5 — Budget breakdown
-After 40 generations, plot true vs. surrogate evaluations for each SCR setting. Show the dramatic difference in true-eval budget consumption.
+After 30 iterations, compare how many evaluations were true vs. surrogate-only for each SCR setting. Show the trade-off between budget saved and SCR level.
 
-### Part 6 — COCO-compatible prescreening BO
-Full prescreening loop with hard SCR ≤ 20% enforcement. X-axis = true function calls only (COCO budget counter). Convergence on Forrester with the corrected SCR accounting.
+### Part 6 — COCO-compatible BO
+Full BO with hard true-evaluation budget. X-axis = true function calls only (COCO budget counter). Compare SCR=0% vs. SCR=20% convergence on Forrester.
 
 ---
 
 ## Exercises
 
 1. In Part 2, reduce training data from 15 to 5 points. Does rank correlation ρ drop? What SCR is safe when ρ is low?
-2. In Part 4, compare SCR = 50% with SCR = 10% on the same true-eval budget. How many more surrogate calls does SCR = 10% make? Does it converge better?
-3. In Part 6, increase the pool size λ from 20 to 50. With SCR = 10%, how many true evals per generation does that give? Does a larger pool improve convergence?
+2. In Part 4, add SCR = 60% and SCR = 80%. At what SCR does convergence clearly worsen due to surrogate drift?
+3. In Part 6, increase `TRUE_BUDGET = 80`. With SCR = 20%, does the BO converge to f* ≈ -6.021?
 
 ---
 
