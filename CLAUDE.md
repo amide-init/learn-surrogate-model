@@ -93,9 +93,10 @@ Additional Python files are allowed inside a lesson folder if the lesson needs h
 | `lesson-13` | **Surrogate control strategies (SCR)** | **Critical concept** |
 | `lesson-14` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
 | `lesson-15` | Noise handling and high-dimensional inputs | Robustness |
-| `lesson-16` | COCO / BBOB benchmark | Evaluation |
-| `lesson-17` | Statistical analysis and paper figures | Results |
-| `lesson-18` | Writing the research paper | Paper |
+| `lesson-16` | **SCR sensitivity — varying surrogate usage from 0% to 80%** | **SCR tuning** |
+| `lesson-17` | COCO / BBOB benchmark | Evaluation |
+| `lesson-18` | Statistical analysis and paper figures | Results |
+| `lesson-19` | Writing the research paper | Paper |
 
 ---
 
