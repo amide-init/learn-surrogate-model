@@ -16,27 +16,31 @@ from sklearn.ensemble import RandomForestRegressor
 from scipy.interpolate import RBFInterpolator
 
 warnings.filterwarnings('ignore')
-os.makedirs('lesson-16/output', exist_ok=True)
+os.makedirs('lesson-15/output', exist_ok=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-SCR_LEVELS    = [0.0, 0.2, 0.4, 0.6, 0.8]
-SCR_LABELS    = ['0%', '20%', '40%', '60%', '80%']
-SCR_COLORS    = ['#1d3557', '#457b9d', '#2a9d8f', '#f4a261', '#e63946']
-SCR_LEVELS_2D = [0.0, 0.4, 0.8]
-N_INIT        = 10
-N_INIT_2D     = 15
-N_ITER        = 15
-N_SEEDS       = 3
-EPOCHS_BO     = 200
-N_MEMBERS     = 5
-T_DROPOUT     = 50
+N_INIT      = 15
+N_INIT_5D   = 20
+N_INIT_10D  = 30
+N_ITER      = 20
+N_ITER_5D   = 15
+N_ITER_10D  = 10
+N_SEEDS     = 3
+SCR_MAX     = 0.20
+EPOCHS_VIZ  = 2000
+EPOCHS_BO   = 500
+EPOCHS_HD   = 300
+N_MEMBERS   = 5
+T_DROPOUT   = 50
+NOISE_VIZ   = 0.5
+NOISE_LEVELS = [0.0, 0.1, 0.5, 1.0, 2.0]
 
-SURROGATES = ['gp', 'mc_dropout', 'deep_ensemble', 'rbf', 'rf']
-LABELS     = ['GP', 'MC Dropout', 'Deep Ensemble', 'RBF', 'Random Forest']
-COLORS     = ['steelblue', 'seagreen', 'darkorange', 'tomato', 'purple']
+SURROGATES  = ['gp', 'mc_dropout', 'deep_ensemble', 'rbf', 'rf']
+LABELS      = ['GP', 'MC Dropout', 'Deep Ensemble', 'RBF', 'Random Forest']
+COLORS      = ['steelblue', 'seagreen', 'darkorange', 'tomato', 'purple']
 
 FORRESTER_OPT = -6.020740
-BRANIN_OPT    =  0.397887
+ACKLEY_OPT    =  0.0
 
 
 # ── Benchmark functions ────────────────────────────────────────────────────────
@@ -45,12 +49,13 @@ def forrester(x):
     return (6*x - 2)**2 * np.sin(12*x - 4)
 
 
-def branin(x):
-    x  = np.asarray(x).ravel()
-    x1 = x[0] * 15 - 5
-    x2 = x[1] * 15
-    return float((x2 - 5.1 / (4*np.pi**2) * x1**2 + 5/np.pi * x1 - 6)**2
-                 + 10*(1 - 1/(8*np.pi)) * np.cos(x1) + 10)
+def ackley(x):
+    x = np.asarray(x).ravel()
+    d = len(x)
+    z = x * 10 - 5
+    t1 = -20.0 * np.exp(-0.2 * np.sqrt(np.sum(z**2) / d))
+    t2 = -np.exp(np.sum(np.cos(2 * np.pi * z)) / d)
+    return float(t1 + t2 + 20.0 + np.e)
 
 
 # ── Neural network ─────────────────────────────────────────────────────────────
@@ -82,7 +87,7 @@ def train_net(X, y, epochs, seed):
 
 
 # ── Surrogate predict ─────────────────────────────────────────────────────────
-def surrogate_predict(stype, X_tr, y_tr, X_cand, seed=0, epochs=200):
+def surrogate_predict(stype, X_tr, y_tr, X_cand, seed=0, epochs=500):
     torch.manual_seed(seed)
 
     if stype == 'gp':
@@ -140,12 +145,12 @@ def ei(mu, std, best, xi=0.01):
 
 # ── SCR-enforced BO ───────────────────────────────────────────────────────────
 def run_bo(stype, func, dim, seed, f_opt,
-           n_init, n_iter, scr_max, epochs=EPOCHS_BO):
+           n_init, n_iter, epochs=EPOCHS_BO, noise_std=0.0, scr_max=SCR_MAX):
     rng = np.random.RandomState(seed)
 
     sampler = LatinHypercube(d=dim, seed=seed)
     X_obs   = sampler.random(n_init)
-    y_obs   = np.array([func(x) for x in X_obs])
+    y_obs   = np.array([func(x) + rng.normal(0, noise_std) for x in X_obs])
 
     true_calls = n_init
     surr_calls = 0
@@ -157,13 +162,13 @@ def run_bo(stype, func, dim, seed, f_opt,
         y_sc   = y_obs.std() + 1e-8
         y_std  = (y_obs - y_mean) / y_sc
 
-        X_cand      = rng.rand(200, dim)
-        mu_s, sig_s = surrogate_predict(stype, X_obs, y_std, X_cand, seed, epochs)
-        mu          = mu_s  * y_sc + y_mean
-        sig         = sig_s * y_sc
+        X_cand        = rng.rand(200, dim)
+        mu_s, sig_s   = surrogate_predict(stype, X_obs, y_std, X_cand, seed, epochs)
+        mu             = mu_s  * y_sc + y_mean
+        sig            = sig_s * y_sc
 
-        acq             = ei(mu, sig, best_true)
-        idx             = np.argmax(acq)
+        acq            = ei(mu, sig, best_true)
+        idx            = np.argmax(acq)
         x_next, mu_next = X_cand[idx], mu[idx]
 
         proj     = (surr_calls + 1) / (true_calls + surr_calls + 1)
@@ -173,7 +178,7 @@ def run_bo(stype, func, dim, seed, f_opt,
             y_next = mu_next
             surr_calls += 1
         else:
-            y_next = func(x_next)
+            y_next = func(x_next) + rng.normal(0, noise_std)
             true_calls += 1
             best_true = min(best_true, y_next)
 
@@ -185,27 +190,16 @@ def run_bo(stype, func, dim, seed, f_opt,
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-def run_seeds(stype, func, dim, f_opt, n_init, n_iter, scr_max, epochs=EPOCHS_BO):
+def run_seeds(stype, func, dim, f_opt, n_init, n_iter, epochs, noise_std=0.0):
     return [
         run_bo(stype, func, dim, RANDOM_SEED + s, f_opt,
-               n_init=n_init, n_iter=n_iter, scr_max=scr_max, epochs=epochs)
+               n_init=n_init, n_iter=n_iter, epochs=epochs, noise_std=noise_std)
         for s in range(N_SEEDS)
     ]
 
 
-def final_gap(hists):
-    return float(np.median([h[-1][1] for h in hists]))
-
-
-def true_calls_used(hists, n_init):
-    return float(np.median([h[-1][0] - n_init for h in hists]))
-
-
-def plot_convergence_scr(ax, results_by_scr, n_init, title):
-    for scr, slabel, scolor in zip(SCR_LEVELS, SCR_LABELS, SCR_COLORS):
-        if scr not in results_by_scr:
-            continue
-        hists  = results_by_scr[scr]
+def plot_convergence(ax, results_per_surrogate, n_init, title):
+    for hists, label, color in zip(results_per_surrogate, LABELS, COLORS):
         max_tc = max(h[-1][0] for h in hists)
         grid   = np.arange(n_init, max_tc + 1)
         runs   = np.array([
@@ -215,218 +209,178 @@ def plot_convergence_scr(ax, results_by_scr, n_init, title):
         med = np.median(runs, axis=0)
         lo  = np.percentile(runs, 25, axis=0)
         hi  = np.percentile(runs, 75, axis=0)
-        ax.semilogy(grid, np.maximum(med, 1e-6), color=scolor,
-                    label=f'SCR≤{slabel}', lw=2)
+        ax.semilogy(grid, np.maximum(med, 1e-6), color=color, label=label, lw=2)
         ax.fill_between(grid, np.maximum(lo, 1e-6), np.maximum(hi, 1e-6),
-                        alpha=0.15, color=scolor)
+                        alpha=0.2, color=color)
     ax.set_xlabel('True function calls')
     ax.set_ylabel('Gap to optimum (log scale)')
     ax.set_title(title)
     ax.legend(fontsize=9)
 
 
-# ── Part 1: GP convergence per SCR level ──────────────────────────────────────
-def part1_gp_convergence(gp_forr):
-    fig, ax = plt.subplots(figsize=(8, 5))
-    plot_convergence_scr(ax, gp_forr, N_INIT,
-                         'Part 1 — GP convergence per SCR ceiling (Forrester 1D)')
+# ── Part 1: Noisy Forrester fit ────────────────────────────────────────────────
+def part1_noisy_fit():
+    rng     = np.random.RandomState(RANDOM_SEED)
+    sampler = LatinHypercube(d=1, seed=RANDOM_SEED)
+    X_tr    = sampler.random(N_INIT).reshape(-1, 1)
+    y_clean = np.array([forrester(x) for x in X_tr])
+    y_noisy = y_clean + rng.normal(0, NOISE_VIZ, size=len(y_clean))
+
+    y_mean, y_sc = y_noisy.mean(), y_noisy.std() + 1e-8
+    y_std        = (y_noisy - y_mean) / y_sc
+
+    X_plot = np.linspace(0, 1, 200).reshape(-1, 1)
+    y_true = np.array([forrester(x) for x in X_plot])
+
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4), sharey=True)
+    for ax, stype, label, color in zip(axes, SURROGATES, LABELS, COLORS):
+        mu_s, sig_s = surrogate_predict(stype, X_tr, y_std, X_plot, RANDOM_SEED, EPOCHS_VIZ)
+        mu  = mu_s  * y_sc + y_mean
+        sig = sig_s * y_sc
+        ax.plot(X_plot, y_true, 'k--', lw=1.5, label='True f(x)')
+        ax.scatter(X_tr, y_noisy, c='k', s=20, zorder=5, label='Noisy obs')
+        ax.plot(X_plot, mu, color=color, lw=2, label='μ')
+        ax.fill_between(X_plot.ravel(), mu - 2*sig, mu + 2*sig,
+                        alpha=0.25, color=color, label='μ±2σ')
+        ax.set_title(label, fontsize=12)
+        ax.set_xlabel('x')
+        if ax is axes[0]:
+            ax.set_ylabel('f(x)')
+        ax.legend(fontsize=7)
+    fig.suptitle(f'Part 1 — Noisy Forrester fit (σ_noise={NOISE_VIZ})', fontsize=13)
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part1_gp_convergence.png', dpi=120)
+    plt.savefig('lesson-15/output/part1_noisy_fit.png', dpi=120)
     plt.close()
     print('Part 1 done.')
 
 
-# ── Part 2: True calls saved per SCR level ────────────────────────────────────
-def part2_true_calls_saved(gp_forr):
-    tc_baseline = true_calls_used(gp_forr[0.0], N_INIT)
-    tcs  = [true_calls_used(gp_forr[s], N_INIT) for s in SCR_LEVELS]
-    savs = [100 * (tc_baseline - tc) / (tc_baseline + 1e-8) for tc in tcs]
+# ── Part 2: RMSE vs noise level ────────────────────────────────────────────────
+def part2_noise_rmse():
+    sampler = LatinHypercube(d=1, seed=RANDOM_SEED)
+    X_tr    = sampler.random(N_INIT).reshape(-1, 1)
+    y_clean = np.array([forrester(x) for x in X_tr])
+    X_test  = np.linspace(0, 1, 200).reshape(-1, 1)
+    y_true  = np.array([forrester(x) for x in X_test])
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    bars = ax.bar(SCR_LABELS, tcs, color=SCR_COLORS)
-    for bar, tc, sav in zip(bars, tcs, savs):
-        ax.text(bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.1,
-                f'{tc:.1f}\n(−{sav:.0f}%)', ha='center', va='bottom', fontsize=9)
-    ax.set_xlabel('SCR ceiling')
-    ax.set_ylabel('Avg true calls beyond initial LHS')
-    ax.set_title('Part 2 — True calls saved per SCR level (GP, Forrester 1D)')
-    ax.set_ylim(0, tc_baseline * 1.25)
+    rmse = {s: [] for s in SURROGATES}
+    for sigma in NOISE_LEVELS:
+        rng     = np.random.RandomState(RANDOM_SEED + 99)
+        y_noisy = y_clean + rng.normal(0, sigma, size=len(y_clean))
+        y_mean, y_sc = y_noisy.mean(), y_noisy.std() + 1e-8
+        y_std        = (y_noisy - y_mean) / y_sc
+        for stype in SURROGATES:
+            mu_s, _ = surrogate_predict(stype, X_tr, y_std, X_test, RANDOM_SEED, EPOCHS_VIZ)
+            mu      = mu_s * y_sc + y_mean
+            rmse[stype].append(np.sqrt(np.mean((mu - y_true)**2)))
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for stype, label, color in zip(SURROGATES, LABELS, COLORS):
+        ax.plot(NOISE_LEVELS, rmse[stype], 'o-', label=label, color=color, lw=2)
+    ax.set_xlabel('Noise standard deviation (σ_noise)')
+    ax.set_ylabel('RMSE on noise-free test set')
+    ax.set_title('Part 2 — Noise robustness: RMSE vs σ_noise')
+    ax.legend()
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part2_true_calls_saved.png', dpi=120)
+    plt.savefig('lesson-15/output/part2_noise_rmse.png', dpi=120)
     plt.close()
     print('Part 2 done.')
 
 
-# ── Part 3: Quality–efficiency frontier (all surrogates) ─────────────────────
-def part3_quality_efficiency(all_forr):
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for stype, label, color in zip(SURROGATES, LABELS, COLORS):
-        tcs  = [true_calls_used(all_forr[stype][s], N_INIT) for s in SCR_LEVELS]
-        gaps = [final_gap(all_forr[stype][s])              for s in SCR_LEVELS]
-        ax.plot(tcs, gaps, 'o-', color=color, label=label, lw=2, markersize=7)
-        for tc, gap, slabel in zip(tcs, gaps, SCR_LABELS):
-            ax.annotate(slabel, (tc, gap), textcoords='offset points',
-                        xytext=(4, 3), fontsize=7, color=color)
-    ax.set_xlabel('Avg true calls beyond initial LHS (fewer = cheaper)')
-    ax.set_ylabel('Final gap to optimum (lower = better)')
-    ax.set_title('Part 3 — Quality–efficiency frontier (Forrester 1D)')
-    ax.legend(fontsize=9)
-    ax.set_yscale('log')
+# ── Part 3: BO convergence under noise ────────────────────────────────────────
+def part3_bo_noise(results):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_convergence(ax, results, N_INIT,
+                     f'Part 3 — BO on noisy Forrester (σ={NOISE_VIZ}, SCR≤{int(SCR_MAX*100)}%)')
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part3_quality_efficiency.png', dpi=120)
+    plt.savefig('lesson-15/output/part3_bo_noise.png', dpi=120)
     plt.close()
     print('Part 3 done.')
 
 
-# ── Part 4: Final gap per surrogate × SCR level ───────────────────────────────
-def part4_gap_by_scr(all_forr):
-    n_sur = len(SURROGATES)
-    n_scr = len(SCR_LEVELS)
-    x     = np.arange(n_sur)
-    width = 0.8 / n_scr
-
-    fig, ax = plt.subplots(figsize=(12, 5))
-    for i, (scr, slabel, scolor) in enumerate(zip(SCR_LEVELS, SCR_LABELS, SCR_COLORS)):
-        gaps   = [final_gap(all_forr[s][scr]) for s in SURROGATES]
-        offset = (i - n_scr / 2 + 0.5) * width
-        bars   = ax.bar(x + offset, gaps, width, label=f'SCR≤{slabel}',
-                        color=scolor, alpha=0.85)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(LABELS, rotation=15)
-    ax.set_ylabel('Final gap to optimum')
-    ax.set_title('Part 4 — Final gap per surrogate × SCR ceiling (Forrester 1D)')
-    ax.legend(fontsize=9)
+# ── Part 4: BO on Ackley 5D ───────────────────────────────────────────────────
+def part4_ackley_5d(results):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_convergence(ax, results, N_INIT_5D,
+                     f'Part 4 — BO on Ackley (d=5, SCR≤{int(SCR_MAX*100)}%)')
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part4_gap_by_scr.png', dpi=120)
+    plt.savefig('lesson-15/output/part4_ackley_5d.png', dpi=120)
     plt.close()
     print('Part 4 done.')
 
 
-# ── Part 5: Branin 2D validation ──────────────────────────────────────────────
-def part5_branin(all_bran):
-    n_sur = len(SURROGATES)
-    n_scr = len(SCR_LEVELS_2D)
-    x     = np.arange(n_sur)
-    width = 0.7 / n_scr
-    bran_colors = [SCR_COLORS[SCR_LEVELS.index(s)] for s in SCR_LEVELS_2D]
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    for i, (scr, scolor) in enumerate(zip(SCR_LEVELS_2D, bran_colors)):
-        gaps   = [final_gap(all_bran[s][scr]) for s in SURROGATES]
-        offset = (i - n_scr / 2 + 0.5) * width
-        slabel = SCR_LABELS[SCR_LEVELS.index(scr)]
-        ax.bar(x + offset, gaps, width, label=f'SCR≤{slabel}',
-               color=scolor, alpha=0.85)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(LABELS, rotation=15)
-    ax.set_ylabel('Final gap to optimum')
-    ax.set_title('Part 5 — Branin (2D) validation: gap per surrogate × SCR ceiling')
-    ax.legend(fontsize=9)
+# ── Part 5: BO on Ackley 10D ──────────────────────────────────────────────────
+def part5_ackley_10d(results):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_convergence(ax, results, N_INIT_10D,
+                     f'Part 5 — BO on Ackley (d=10, SCR≤{int(SCR_MAX*100)}%)')
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part5_branin.png', dpi=120)
+    plt.savefig('lesson-15/output/part5_ackley_10d.png', dpi=120)
     plt.close()
     print('Part 5 done.')
 
 
-# ── Part 6: Leaderboard and recommendations ───────────────────────────────────
-def part6_leaderboard(all_forr):
-    def recommend(gaps_by_scr):
-        baseline  = gaps_by_scr[0.0] + 1e-6
-        threshold = baseline * 1.5
-        best_scr  = 0.0
-        for scr in SCR_LEVELS:
-            if gaps_by_scr[scr] <= threshold:
-                best_scr = scr
-        return best_scr
+# ── Part 6: Leaderboard ────────────────────────────────────────────────────────
+def part6_leaderboard(res_noisy, res_5d, res_10d):
+    def final_gap(hists):
+        return float(np.median([h[-1][1] for h in hists]))
 
-    rec_scrs  = []
-    savings   = []
-    penalties = []
+    tasks = [
+        ('Noisy Forrester (1D)',   res_noisy),
+        ('Ackley (d=5)',           res_5d),
+        ('Ackley (d=10)',          res_10d),
+    ]
 
-    tc_at_scr0 = true_calls_used(all_forr[SURROGATES[0]][0.0], N_INIT)
-
-    for stype in SURROGATES:
-        gaps  = {scr: final_gap(all_forr[stype][scr]) for scr in SCR_LEVELS}
-        r     = recommend(gaps)
-        rec_scrs.append(r)
-        tc_r  = true_calls_used(all_forr[stype][r], N_INIT)
-        sav   = 100 * (tc_at_scr0 - tc_r) / (tc_at_scr0 + 1e-8)
-        savings.append(max(sav, 0))
-        pen   = 100 * (gaps[r] - gaps[0.0]) / (gaps[0.0] + 1e-6)
-        penalties.append(max(pen, 0))
-
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-
-    axes[0].bar(LABELS, [s * 100 for s in rec_scrs], color=COLORS)
-    axes[0].set_ylabel('Recommended max SCR (%)')
-    axes[0].set_title('Recommended SCR ceiling')
-    axes[0].tick_params(axis='x', rotation=20)
-    for i, v in enumerate(rec_scrs):
-        axes[0].text(i, v * 100 + 0.5, f'{int(v*100)}%', ha='center', va='bottom', fontsize=10)
-
-    axes[1].bar(LABELS, savings, color=COLORS)
-    axes[1].set_ylabel('True call savings (%)')
-    axes[1].set_title('Savings at recommended SCR')
-    axes[1].tick_params(axis='x', rotation=20)
-    for i, v in enumerate(savings):
-        axes[1].text(i, v + 0.3, f'{v:.0f}%', ha='center', va='bottom', fontsize=10)
-
-    axes[2].bar(LABELS, penalties, color=COLORS)
-    axes[2].set_ylabel('Quality penalty (%)')
-    axes[2].set_title('Gap increase vs SCR=0%')
-    axes[2].tick_params(axis='x', rotation=20)
-    for i, v in enumerate(penalties):
-        axes[2].text(i, v + 0.1, f'{v:.0f}%', ha='center', va='bottom', fontsize=10)
-
-    fig.suptitle('Part 6 — Leaderboard: recommended SCR per surrogate', fontsize=13)
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    for ax, (title, res) in zip(axes, tasks):
+        vals = [final_gap(res[s]) for s in SURROGATES]
+        bars = ax.bar(LABELS, vals, color=COLORS)
+        ax.set_ylabel('Final gap to optimum')
+        ax.set_title(title)
+        ax.tick_params(axis='x', rotation=30)
+        for bar, v in zip(bars, vals):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                    f'{v:.3f}', ha='center', va='bottom', fontsize=9)
+    fig.suptitle('Part 6 — Leaderboard: noise + high-dim robustness', fontsize=13)
     plt.tight_layout()
-    plt.savefig('lesson-16/output/part6_leaderboard.png', dpi=120)
+    plt.savefig('lesson-15/output/part6_leaderboard.png', dpi=120)
     plt.close()
 
-    print('\nPart 6 — Recommendations (criterion: gap ≤ 1.5 × baseline gap)')
-    print(f"{'Surrogate':<18} {'Rec. SCR':>10} {'Savings':>10} {'Gap penalty':>12}")
-    print('-' * 54)
-    for label, r, sav, pen in zip(LABELS, rec_scrs, savings, penalties):
-        print(f'{label:<18} {int(r*100):>9}% {sav:>9.1f}% {pen:>11.1f}%')
+    print('\nPart 6 — Leaderboard')
+    print(f"{'Surrogate':<18} {'Noisy 1D':>10} {'5D':>10} {'10D':>10}")
+    print('-' * 52)
+    for s, label in zip(SURROGATES, LABELS):
+        g1  = final_gap(res_noisy[s])
+        g5  = final_gap(res_5d[s])
+        g10 = final_gap(res_10d[s])
+        print(f'{label:<18} {g1:>10.4f} {g5:>10.4f} {g10:>10.4f}')
     print('Part 6 done.')
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print('Lesson 16 — SCR sensitivity: varying surrogate usage from 0% to 80%')
-    print('=' * 70)
+    print('Lesson 15 — Noise handling and high-dimensional inputs')
+    print('=' * 60)
 
-    print('Running GP SCR sweep on Forrester (Parts 1–2)...')
-    gp_forr = {scr: run_seeds('gp', forrester, 1, FORRESTER_OPT,
-                               N_INIT, N_ITER, scr)
-               for scr in SCR_LEVELS}
+    part1_noisy_fit()
+    part2_noise_rmse()
 
-    part1_gp_convergence(gp_forr)
-    part2_true_calls_saved(gp_forr)
+    print('Running BO experiments (this may take a few minutes)...')
+    res_noisy = {}
+    res_5d    = {}
+    res_10d   = {}
 
-    print('Running all surrogates × SCR levels on Forrester (Parts 3–4, 6)...')
-    all_forr = {}
     for stype, label in zip(SURROGATES, LABELS):
         print(f'  {label}...')
-        all_forr[stype] = {scr: run_seeds(stype, forrester, 1, FORRESTER_OPT,
-                                          N_INIT, N_ITER, scr)
-                           for scr in SCR_LEVELS}
+        res_noisy[stype] = run_seeds(stype, forrester, 1,  FORRESTER_OPT,
+                                     N_INIT, N_ITER, EPOCHS_BO, NOISE_VIZ)
+        res_5d[stype]    = run_seeds(stype, ackley,   5,  ACKLEY_OPT,
+                                     N_INIT_5D, N_ITER_5D, EPOCHS_HD)
+        res_10d[stype]   = run_seeds(stype, ackley,   10, ACKLEY_OPT,
+                                     N_INIT_10D, N_ITER_10D, EPOCHS_HD)
 
-    part3_quality_efficiency(all_forr)
-    part4_gap_by_scr(all_forr)
+    part3_bo_noise([res_noisy[s] for s in SURROGATES])
+    part4_ackley_5d([res_5d[s]   for s in SURROGATES])
+    part5_ackley_10d([res_10d[s] for s in SURROGATES])
+    part6_leaderboard(res_noisy, res_5d, res_10d)
 
-    print('Running Branin 2D validation (Part 5)...')
-    all_bran = {}
-    for stype, label in zip(SURROGATES, LABELS):
-        print(f'  {label}...')
-        all_bran[stype] = {scr: run_seeds(stype, branin, 2, BRANIN_OPT,
-                                          N_INIT_2D, N_ITER, scr)
-                           for scr in SCR_LEVELS_2D}
-
-    part5_branin(all_bran)
-    part6_leaderboard(all_forr)
-
-    print('\nAll plots saved to lesson-16/output/')
+    print('\nAll plots saved to lesson-15/output/')

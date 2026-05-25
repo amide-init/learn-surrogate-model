@@ -9,69 +9,48 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from scipy.stats import norm as sp_norm
-from scipy.optimize import minimize as sp_minimize
 from scipy.stats.qmc import LatinHypercube
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern
 from sklearn.ensemble import RandomForestRegressor
 from scipy.interpolate import RBFInterpolator
-import cocoex
 
 warnings.filterwarnings('ignore')
-os.makedirs('lesson-17/output', exist_ok=True)
+os.makedirs('lesson-16/output', exist_ok=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-INSTANCE    = 1
-FUNC_IDS    = [1, 2, 8, 15]
-FUNC_NAMES  = ['Sphere (f1)', 'Ellipsoidal (f2)', 'Rosenbrock (f8)', 'Rastrigin (f15)']
-FUNC_SHORT  = ['Sphere', 'Ellipsoidal', 'Rosenbrock', 'Rastrigin']
-DIM_MAIN    = 2
-DIM_HD      = 5
-N_INIT      = 10
-N_INIT_HD   = 15
-N_ITER      = 15
-N_SEEDS     = 3
-N_SEEDS_MF  = 2
-EPOCHS_BO   = 100
-N_MEMBERS   = 5
-T_DROPOUT   = 50
-SCR_MAX     = 0.20
-TARGETS     = [10.0, 1.0, 0.1, 0.01]
+SCR_LEVELS    = [0.0, 0.2, 0.4, 0.6, 0.8]
+SCR_LABELS    = ['0%', '20%', '40%', '60%', '80%']
+SCR_COLORS    = ['#1d3557', '#457b9d', '#2a9d8f', '#f4a261', '#e63946']
+SCR_LEVELS_2D = [0.0, 0.4, 0.8]
+N_INIT        = 10
+N_INIT_2D     = 15
+N_ITER        = 15
+N_SEEDS       = 3
+EPOCHS_BO     = 200
+N_MEMBERS     = 5
+T_DROPOUT     = 50
 
 SURROGATES = ['gp', 'mc_dropout', 'deep_ensemble', 'rbf', 'rf']
 LABELS     = ['GP', 'MC Dropout', 'Deep Ensemble', 'RBF', 'Random Forest']
 COLORS     = ['steelblue', 'seagreen', 'darkorange', 'tomato', 'purple']
 
-
-# ── BBOB wrapper ───────────────────────────────────────────────────────────────
-def make_bbob(func_id, dim, instance=INSTANCE):
-    suite = cocoex.Suite(
-        'bbob',
-        f'instances:{instance}',
-        f'dimensions:{dim} function_indices:{func_id}',
-    )
-    f  = suite[0]
-    lb = f.lower_bounds.copy()
-    ub = f.upper_bounds.copy()
-
-    def wrapped(x):
-        return float(f(lb + np.asarray(x).ravel() * (ub - lb)))
-
-    wrapped._alive = (suite, f)
-    return wrapped
+FORRESTER_OPT = -6.020740
+BRANIN_OPT    =  0.397887
 
 
-def find_fopt(func, dim, n_restarts=20):
-    rng  = np.random.RandomState(RANDOM_SEED)
-    best = np.inf
-    for _ in range(n_restarts):
-        res = sp_minimize(
-            func, rng.rand(dim), method='L-BFGS-B',
-            bounds=[(1e-6, 1 - 1e-6)] * dim,
-            options={'maxiter': 10000, 'ftol': 1e-15},
-        )
-        best = min(best, res.fun)
-    return best
+# ── Benchmark functions ────────────────────────────────────────────────────────
+def forrester(x):
+    x = float(np.asarray(x).ravel()[0])
+    return (6*x - 2)**2 * np.sin(12*x - 4)
+
+
+def branin(x):
+    x  = np.asarray(x).ravel()
+    x1 = x[0] * 15 - 5
+    x2 = x[1] * 15
+    return float((x2 - 5.1 / (4*np.pi**2) * x1**2 + 5/np.pi * x1 - 6)**2
+                 + 10*(1 - 1/(8*np.pi)) * np.cos(x1) + 10)
 
 
 # ── Neural network ─────────────────────────────────────────────────────────────
@@ -103,7 +82,7 @@ def train_net(X, y, epochs, seed):
 
 
 # ── Surrogate predict ─────────────────────────────────────────────────────────
-def surrogate_predict(stype, X_tr, y_tr, X_cand, seed=0, epochs=100):
+def surrogate_predict(stype, X_tr, y_tr, X_cand, seed=0, epochs=200):
     torch.manual_seed(seed)
 
     if stype == 'gp':
@@ -161,7 +140,7 @@ def ei(mu, std, best, xi=0.01):
 
 # ── SCR-enforced BO ───────────────────────────────────────────────────────────
 def run_bo(stype, func, dim, seed, f_opt,
-           n_init, n_iter, epochs=EPOCHS_BO, scr_max=SCR_MAX):
+           n_init, n_iter, scr_max, epochs=EPOCHS_BO):
     rng = np.random.RandomState(seed)
 
     sampler = LatinHypercube(d=dim, seed=seed)
@@ -205,18 +184,28 @@ def run_bo(stype, func, dim, seed, f_opt,
     return history
 
 
-def run_seeds(stype, func, dim, f_opt, n_init, n_iter, n_seeds, epochs=EPOCHS_BO):
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def run_seeds(stype, func, dim, f_opt, n_init, n_iter, scr_max, epochs=EPOCHS_BO):
     return [
         run_bo(stype, func, dim, RANDOM_SEED + s, f_opt,
-               n_init=n_init, n_iter=n_iter, epochs=epochs)
-        for s in range(n_seeds)
+               n_init=n_init, n_iter=n_iter, scr_max=scr_max, epochs=epochs)
+        for s in range(N_SEEDS)
     ]
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def plot_convergence(ax, results_by_stype, n_init, title):
-    for stype, label, color in zip(SURROGATES, LABELS, COLORS):
-        hists  = results_by_stype[stype]
+def final_gap(hists):
+    return float(np.median([h[-1][1] for h in hists]))
+
+
+def true_calls_used(hists, n_init):
+    return float(np.median([h[-1][0] - n_init for h in hists]))
+
+
+def plot_convergence_scr(ax, results_by_scr, n_init, title):
+    for scr, slabel, scolor in zip(SCR_LEVELS, SCR_LABELS, SCR_COLORS):
+        if scr not in results_by_scr:
+            continue
+        hists  = results_by_scr[scr]
         max_tc = max(h[-1][0] for h in hists)
         grid   = np.arange(n_init, max_tc + 1)
         runs   = np.array([
@@ -226,244 +215,218 @@ def plot_convergence(ax, results_by_stype, n_init, title):
         med = np.median(runs, axis=0)
         lo  = np.percentile(runs, 25, axis=0)
         hi  = np.percentile(runs, 75, axis=0)
-        ax.semilogy(grid, np.maximum(med, 1e-6), color=color, label=label, lw=2)
+        ax.semilogy(grid, np.maximum(med, 1e-6), color=scolor,
+                    label=f'SCR≤{slabel}', lw=2)
         ax.fill_between(grid, np.maximum(lo, 1e-6), np.maximum(hi, 1e-6),
-                        alpha=0.2, color=color)
+                        alpha=0.15, color=scolor)
     ax.set_xlabel('True function calls')
     ax.set_ylabel('Gap to optimum (log scale)')
     ax.set_title(title)
     ax.legend(fontsize=9)
 
 
-def final_gap(hists):
-    return float(np.median([h[-1][1] for h in hists]))
-
-
-# ── Part 1: BBOB function gallery ─────────────────────────────────────────────
-def part1_gallery():
-    grid  = np.linspace(0, 1, 60)
-    Xg, Yg = np.meshgrid(grid, grid)
-    pts   = np.column_stack([Xg.ravel(), Yg.ravel()])
-
-    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
-    for ax, fid, fname in zip(axes, FUNC_IDS, FUNC_NAMES):
-        func = make_bbob(fid, 2)
-        Z    = np.array([func(p) for p in pts]).reshape(60, 60)
-        im   = ax.contourf(Xg*10 - 5, Yg*10 - 5, Z, levels=25, cmap='viridis')
-        plt.colorbar(im, ax=ax)
-        ax.set_title(fname, fontsize=11)
-        ax.set_xlabel('x₁')
-        ax.set_ylabel('x₂')
-
-    fig.suptitle('Part 1 — BBOB function landscapes (d=2, instance 1)', fontsize=13)
+# ── Part 1: GP convergence per SCR level ──────────────────────────────────────
+def part1_gp_convergence(gp_forr):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_convergence_scr(ax, gp_forr, N_INIT,
+                         'Part 1 — GP convergence per SCR ceiling (Forrester 1D)')
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part1_gallery.png', dpi=120)
+    plt.savefig('lesson-16/output/part1_gp_convergence.png', dpi=120)
     plt.close()
     print('Part 1 done.')
 
 
-# ── Part 2: Convergence on Sphere (f1, d=2) ───────────────────────────────────
-def part2_sphere_convergence(sphere_results):
-    fig, ax = plt.subplots(figsize=(8, 5))
-    plot_convergence(ax, sphere_results, N_INIT,
-                     'Part 2 — BBOB Sphere (f1, d=2): convergence per surrogate')
+# ── Part 2: True calls saved per SCR level ────────────────────────────────────
+def part2_true_calls_saved(gp_forr):
+    tc_baseline = true_calls_used(gp_forr[0.0], N_INIT)
+    tcs  = [true_calls_used(gp_forr[s], N_INIT) for s in SCR_LEVELS]
+    savs = [100 * (tc_baseline - tc) / (tc_baseline + 1e-8) for tc in tcs]
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bars = ax.bar(SCR_LABELS, tcs, color=SCR_COLORS)
+    for bar, tc, sav in zip(bars, tcs, savs):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.1,
+                f'{tc:.1f}\n(−{sav:.0f}%)', ha='center', va='bottom', fontsize=9)
+    ax.set_xlabel('SCR ceiling')
+    ax.set_ylabel('Avg true calls beyond initial LHS')
+    ax.set_title('Part 2 — True calls saved per SCR level (GP, Forrester 1D)')
+    ax.set_ylim(0, tc_baseline * 1.25)
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part2_sphere_convergence.png', dpi=120)
+    plt.savefig('lesson-16/output/part2_true_calls_saved.png', dpi=120)
     plt.close()
     print('Part 2 done.')
 
 
-# ── Part 3: Performance profile ────────────────────────────────────────────────
-def part3_performance_profile(sphere_results):
-    fig, ax = plt.subplots(figsize=(8, 5))
-
+# ── Part 3: Quality–efficiency frontier (all surrogates) ─────────────────────
+def part3_quality_efficiency(all_forr):
+    fig, ax = plt.subplots(figsize=(8, 6))
     for stype, label, color in zip(SURROGATES, LABELS, COLORS):
-        hists  = sphere_results[stype]
-        max_tc = max(h[-1][0] for h in hists)
-        budgets = np.arange(N_INIT, max_tc + 1)
-
-        # For each (seed, target) pair: first budget where gap < target
-        solved = []
-        for hist in hists:
-            for tau in TARGETS:
-                hits = [h[0] for h in hist if h[1] < tau]
-                solved.append(hits[0] if hits else np.inf)
-        solved = np.array(solved)
-
-        frac = np.array([np.mean(solved <= b) for b in budgets])
-        ax.plot(budgets, frac, color=color, label=label, lw=2)
-
-    ax.set_xlabel('True function calls')
-    ax.set_ylabel('Fraction of targets solved')
-    ax.set_title(f'Part 3 — Performance profile: Sphere (f1, d=2)\n'
-                 f'Targets τ ∈ {TARGETS}')
+        tcs  = [true_calls_used(all_forr[stype][s], N_INIT) for s in SCR_LEVELS]
+        gaps = [final_gap(all_forr[stype][s])              for s in SCR_LEVELS]
+        ax.plot(tcs, gaps, 'o-', color=color, label=label, lw=2, markersize=7)
+        for tc, gap, slabel in zip(tcs, gaps, SCR_LABELS):
+            ax.annotate(slabel, (tc, gap), textcoords='offset points',
+                        xytext=(4, 3), fontsize=7, color=color)
+    ax.set_xlabel('Avg true calls beyond initial LHS (fewer = cheaper)')
+    ax.set_ylabel('Final gap to optimum (lower = better)')
+    ax.set_title('Part 3 — Quality–efficiency frontier (Forrester 1D)')
     ax.legend(fontsize=9)
-    ax.set_ylim(-0.02, 1.05)
+    ax.set_yscale('log')
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part3_performance_profile.png', dpi=120)
+    plt.savefig('lesson-16/output/part3_quality_efficiency.png', dpi=120)
     plt.close()
     print('Part 3 done.')
 
 
-# ── Part 4: Multi-function heatmap ────────────────────────────────────────────
-def part4_multi_function(mf_results):
-    gap_mat = np.zeros((len(SURROGATES), len(FUNC_IDS)))
-    for j, fid in enumerate(FUNC_IDS):
-        for i, stype in enumerate(SURROGATES):
-            gap_mat[i, j] = final_gap(mf_results[fid][stype])
+# ── Part 4: Final gap per surrogate × SCR level ───────────────────────────────
+def part4_gap_by_scr(all_forr):
+    n_sur = len(SURROGATES)
+    n_scr = len(SCR_LEVELS)
+    x     = np.arange(n_sur)
+    width = 0.8 / n_scr
 
-    log_gap = np.log10(gap_mat + 1e-6)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    for i, (scr, slabel, scolor) in enumerate(zip(SCR_LEVELS, SCR_LABELS, SCR_COLORS)):
+        gaps   = [final_gap(all_forr[s][scr]) for s in SURROGATES]
+        offset = (i - n_scr / 2 + 0.5) * width
+        bars   = ax.bar(x + offset, gaps, width, label=f'SCR≤{slabel}',
+                        color=scolor, alpha=0.85)
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-    im = ax.imshow(log_gap, cmap='RdYlGn_r', aspect='auto',
-                   vmin=log_gap.min(), vmax=log_gap.max())
-    plt.colorbar(im, ax=ax, label='log₁₀(final gap + ε)')
-    ax.set_xticks(range(len(FUNC_IDS)))
-    ax.set_xticklabels(FUNC_SHORT, rotation=15, fontsize=11)
-    ax.set_yticks(range(len(SURROGATES)))
-    ax.set_yticklabels(LABELS, fontsize=11)
-    for i in range(len(SURROGATES)):
-        for j in range(len(FUNC_IDS)):
-            v   = gap_mat[i, j]
-            txt = f'{v:.2f}' if v < 100 else f'{v:.0f}'
-            fg  = 'white' if log_gap[i, j] > (log_gap.min() + log_gap.max()) / 2 else 'black'
-            ax.text(j, i, txt, ha='center', va='center', fontsize=9, color=fg)
-    ax.set_title('Part 4 — Final gap: surrogates × BBOB functions (d=2)\n'
-                 '(green = small gap = better)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(LABELS, rotation=15)
+    ax.set_ylabel('Final gap to optimum')
+    ax.set_title('Part 4 — Final gap per surrogate × SCR ceiling (Forrester 1D)')
+    ax.legend(fontsize=9)
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part4_multi_function.png', dpi=120)
+    plt.savefig('lesson-16/output/part4_gap_by_scr.png', dpi=120)
     plt.close()
     print('Part 4 done.')
 
 
-# ── Part 5: Dimension scaling ──────────────────────────────────────────────────
-def part5_dim_scaling(sphere_d2, sphere_d5):
-    gaps_d2 = [final_gap(sphere_d2[s]) for s in SURROGATES]
-    gaps_d5 = [final_gap(sphere_d5[s]) for s in SURROGATES]
+# ── Part 5: Branin 2D validation ──────────────────────────────────────────────
+def part5_branin(all_bran):
+    n_sur = len(SURROGATES)
+    n_scr = len(SCR_LEVELS_2D)
+    x     = np.arange(n_sur)
+    width = 0.7 / n_scr
+    bran_colors = [SCR_COLORS[SCR_LEVELS.index(s)] for s in SCR_LEVELS_2D]
 
-    x     = np.arange(len(SURROGATES))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(9, 5))
-    b1 = ax.bar(x - width/2, gaps_d2, width, label='d=2', color=COLORS, alpha=0.85)
-    b2 = ax.bar(x + width/2, gaps_d5, width, label='d=5', color=COLORS, alpha=0.45,
-                hatch='///')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for i, (scr, scolor) in enumerate(zip(SCR_LEVELS_2D, bran_colors)):
+        gaps   = [final_gap(all_bran[s][scr]) for s in SURROGATES]
+        offset = (i - n_scr / 2 + 0.5) * width
+        slabel = SCR_LABELS[SCR_LEVELS.index(scr)]
+        ax.bar(x + offset, gaps, width, label=f'SCR≤{slabel}',
+               color=scolor, alpha=0.85)
+
     ax.set_xticks(x)
     ax.set_xticklabels(LABELS, rotation=15)
     ax.set_ylabel('Final gap to optimum')
-    ax.set_title('Part 5 — Dimension scaling: Sphere (f1) at d=2 vs d=5')
-    ax.legend()
-    ax.set_yscale('log')
+    ax.set_title('Part 5 — Branin (2D) validation: gap per surrogate × SCR ceiling')
+    ax.legend(fontsize=9)
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part5_dim_scaling.png', dpi=120)
+    plt.savefig('lesson-16/output/part5_branin.png', dpi=120)
     plt.close()
     print('Part 5 done.')
 
 
-# ── Part 6: Leaderboard ────────────────────────────────────────────────────────
-def part6_leaderboard(mf_results):
-    ranks = np.zeros((len(SURROGATES), len(FUNC_IDS)))
-    for j, fid in enumerate(FUNC_IDS):
-        gaps = [final_gap(mf_results[fid][s]) for s in SURROGATES]
-        ranks[:, j] = np.argsort(np.argsort(gaps)) + 1  # 1 = best
+# ── Part 6: Leaderboard and recommendations ───────────────────────────────────
+def part6_leaderboard(all_forr):
+    def recommend(gaps_by_scr):
+        baseline  = gaps_by_scr[0.0] + 1e-6
+        threshold = baseline * 1.5
+        best_scr  = 0.0
+        for scr in SCR_LEVELS:
+            if gaps_by_scr[scr] <= threshold:
+                best_scr = scr
+        return best_scr
 
-    avg_ranks = ranks.mean(axis=1)
+    rec_scrs  = []
+    savings   = []
+    penalties = []
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    tc_at_scr0 = true_calls_used(all_forr[SURROGATES[0]][0.0], N_INIT)
 
-    im = axes[0].imshow(ranks, cmap='RdYlGn_r', vmin=1, vmax=len(SURROGATES),
-                        aspect='auto')
-    plt.colorbar(im, ax=axes[0])
-    axes[0].set_xticks(range(len(FUNC_IDS)))
-    axes[0].set_xticklabels(FUNC_SHORT, rotation=15)
-    axes[0].set_yticks(range(len(SURROGATES)))
-    axes[0].set_yticklabels(LABELS)
-    for i in range(len(SURROGATES)):
-        for j in range(len(FUNC_IDS)):
-            axes[0].text(j, i, f'{int(ranks[i,j])}',
-                         ha='center', va='center', fontsize=13, fontweight='bold',
-                         color='white' if ranks[i,j] > 3 else 'black')
-    axes[0].set_title('Rank per function (1 = best)')
+    for stype in SURROGATES:
+        gaps  = {scr: final_gap(all_forr[stype][scr]) for scr in SCR_LEVELS}
+        r     = recommend(gaps)
+        rec_scrs.append(r)
+        tc_r  = true_calls_used(all_forr[stype][r], N_INIT)
+        sav   = 100 * (tc_at_scr0 - tc_r) / (tc_at_scr0 + 1e-8)
+        savings.append(max(sav, 0))
+        pen   = 100 * (gaps[r] - gaps[0.0]) / (gaps[0.0] + 1e-6)
+        penalties.append(max(pen, 0))
 
-    bars = axes[1].bar(LABELS, avg_ranks, color=COLORS)
-    axes[1].set_ylabel('Average rank (lower = better)')
-    axes[1].set_title('Overall average rank across 4 BBOB functions')
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    axes[0].bar(LABELS, [s * 100 for s in rec_scrs], color=COLORS)
+    axes[0].set_ylabel('Recommended max SCR (%)')
+    axes[0].set_title('Recommended SCR ceiling')
+    axes[0].tick_params(axis='x', rotation=20)
+    for i, v in enumerate(rec_scrs):
+        axes[0].text(i, v * 100 + 0.5, f'{int(v*100)}%', ha='center', va='bottom', fontsize=10)
+
+    axes[1].bar(LABELS, savings, color=COLORS)
+    axes[1].set_ylabel('True call savings (%)')
+    axes[1].set_title('Savings at recommended SCR')
     axes[1].tick_params(axis='x', rotation=20)
-    for bar, v in zip(bars, avg_ranks):
-        axes[1].text(bar.get_x() + bar.get_width() / 2,
-                     bar.get_height() + 0.03,
-                     f'{v:.1f}', ha='center', va='bottom', fontsize=10)
+    for i, v in enumerate(savings):
+        axes[1].text(i, v + 0.3, f'{v:.0f}%', ha='center', va='bottom', fontsize=10)
 
-    fig.suptitle('Part 6 — BBOB Leaderboard', fontsize=13)
+    axes[2].bar(LABELS, penalties, color=COLORS)
+    axes[2].set_ylabel('Quality penalty (%)')
+    axes[2].set_title('Gap increase vs SCR=0%')
+    axes[2].tick_params(axis='x', rotation=20)
+    for i, v in enumerate(penalties):
+        axes[2].text(i, v + 0.1, f'{v:.0f}%', ha='center', va='bottom', fontsize=10)
+
+    fig.suptitle('Part 6 — Leaderboard: recommended SCR per surrogate', fontsize=13)
     plt.tight_layout()
-    plt.savefig('lesson-17/output/part6_leaderboard.png', dpi=120)
+    plt.savefig('lesson-16/output/part6_leaderboard.png', dpi=120)
     plt.close()
 
-    print('\nPart 6 — Overall ranking (average rank across 4 BBOB functions)')
-    print(f"{'Surrogate':<18} {'Avg Rank':>10}")
-    print('-' * 30)
-    for i in np.argsort(avg_ranks):
-        print(f'{LABELS[i]:<18} {avg_ranks[i]:>10.2f}')
+    print('\nPart 6 — Recommendations (criterion: gap ≤ 1.5 × baseline gap)')
+    print(f"{'Surrogate':<18} {'Rec. SCR':>10} {'Savings':>10} {'Gap penalty':>12}")
+    print('-' * 54)
+    for label, r, sav, pen in zip(LABELS, rec_scrs, savings, penalties):
+        print(f'{label:<18} {int(r*100):>9}% {sav:>9.1f}% {pen:>11.1f}%')
     print('Part 6 done.')
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print('Lesson 17 — COCO / BBOB benchmark')
-    print('=' * 60)
+    print('Lesson 16 — SCR sensitivity: varying surrogate usage from 0% to 80%')
+    print('=' * 70)
 
-    part1_gallery()
+    print('Running GP SCR sweep on Forrester (Parts 1–2)...')
+    gp_forr = {scr: run_seeds('gp', forrester, 1, FORRESTER_OPT,
+                               N_INIT, N_ITER, scr)
+               for scr in SCR_LEVELS}
 
-    # Parts 2–3: sphere (f1) at d=2
-    print('Finding f_opt for Sphere (f1, d=2)...')
-    f_opt_sphere = find_fopt(make_bbob(1, DIM_MAIN), DIM_MAIN)
-    print(f'  f_opt ≈ {f_opt_sphere:.4f}')
+    part1_gp_convergence(gp_forr)
+    part2_true_calls_saved(gp_forr)
 
-    print('Running BO on Sphere (Parts 2–3)...')
-    sphere_func  = make_bbob(1, DIM_MAIN)
-    sphere_d2    = {}
+    print('Running all surrogates × SCR levels on Forrester (Parts 3–4, 6)...')
+    all_forr = {}
     for stype, label in zip(SURROGATES, LABELS):
         print(f'  {label}...')
-        sphere_d2[stype] = run_seeds(stype, sphere_func, DIM_MAIN,
-                                     f_opt_sphere, N_INIT, N_ITER, N_SEEDS)
+        all_forr[stype] = {scr: run_seeds(stype, forrester, 1, FORRESTER_OPT,
+                                          N_INIT, N_ITER, scr)
+                           for scr in SCR_LEVELS}
 
-    part2_sphere_convergence(sphere_d2)
-    part3_performance_profile(sphere_d2)
+    part3_quality_efficiency(all_forr)
+    part4_gap_by_scr(all_forr)
 
-    # Part 4: multi-function benchmark
-    print('Finding f_opts for all 4 BBOB functions...')
-    f_opts = {}
-    for fid, fname in zip(FUNC_IDS, FUNC_NAMES):
-        f_opts[fid] = find_fopt(make_bbob(fid, DIM_MAIN), DIM_MAIN)
-        print(f'  {fname}: f_opt ≈ {f_opts[fid]:.4f}')
-
-    print('Running multi-function benchmark (Part 4)...')
-    mf_results = {}
-    for fid, fname in zip(FUNC_IDS, FUNC_NAMES):
-        mf_results[fid] = {}
-        func = make_bbob(fid, DIM_MAIN)
-        for stype, label in zip(SURROGATES, LABELS):
-            print(f'  {fname} × {label}...')
-            mf_results[fid][stype] = run_seeds(
-                stype, func, DIM_MAIN, f_opts[fid],
-                N_INIT, N_ITER, N_SEEDS_MF,
-            )
-
-    part4_multi_function(mf_results)
-
-    # Part 5: dimension scaling (sphere at d=5)
-    print('Running dimension scaling on Sphere d=5 (Part 5)...')
-    f_opt_sphere_d5 = find_fopt(make_bbob(1, DIM_HD), DIM_HD)
-    print(f'  Sphere d={DIM_HD}: f_opt ≈ {f_opt_sphere_d5:.4f}')
-    sphere_func_d5 = make_bbob(1, DIM_HD)
-    sphere_d5 = {}
+    print('Running Branin 2D validation (Part 5)...')
+    all_bran = {}
     for stype, label in zip(SURROGATES, LABELS):
         print(f'  {label}...')
-        sphere_d5[stype] = run_seeds(
-            stype, sphere_func_d5, DIM_HD,
-            f_opt_sphere_d5, N_INIT_HD, N_ITER, N_SEEDS_MF,
-        )
+        all_bran[stype] = {scr: run_seeds(stype, branin, 2, BRANIN_OPT,
+                                          N_INIT_2D, N_ITER, scr)
+                           for scr in SCR_LEVELS_2D}
 
-    part5_dim_scaling(sphere_d2, sphere_d5)
-    part6_leaderboard(mf_results)
+    part5_branin(all_bran)
+    part6_leaderboard(all_forr)
 
-    print('\nAll plots saved to lesson-17/output/')
+    print('\nAll plots saved to lesson-16/output/')

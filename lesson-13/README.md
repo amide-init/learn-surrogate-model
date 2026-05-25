@@ -1,33 +1,20 @@
-# Lesson 13 — Surrogate Control Ratio (SCR)
+# Lesson 12 — MC Dropout vs Deep Ensembles vs GP
 
 ## Objective
 
-Understand what SCR is, why it must stay below 20% for valid surrogate-assisted optimisation, and implement an SCR enforcer inside the BO loop.
-
----
-
-## Core definition
-
-```
-SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)
-```
-
-- **SCR = 0%** — pure BO: every accepted point is truly evaluated
-- **SCR = 20%** — 1 in 5 evaluations uses the surrogate prediction as fitness (saves 1 true eval per 5 steps)
-- **SCR > 20%** — risky: training on too many surrogate-predicted y values causes surrogate drift
-
-### Why SCR must be controlled
-If the surrogate's prediction `μ(x)` is used as the fitness value `y` and that point is added back to the training dataset, the surrogate then trains on its own errors. Over many steps this causes **surrogate drift** — the model becomes increasingly inaccurate while appearing confident.
+Run a head-to-head comparison of all three surrogates on the same benchmarks (Forrester 1D and Branin 2D) — mean fit quality, uncertainty calibration, BO convergence speed, and computational cost.
 
 ---
 
 ## Concepts
 
-- **SCR enforcer** — before each BO step, check: "if I use the surrogate now, will SCR exceed the ceiling?" If yes → call the true function
-- **Projected SCR** — `(surr_calls + 1) / (true_calls + surr_calls + 1)`; compare to `scr_max` before deciding
-- **Rank correlation** — Spearman ρ between surrogate ranking and true ranking; high ρ means prescreening is trustworthy
-- **Surrogate drift** — if surrogate-predicted y values are added back as training data, the surrogate trains on its own errors
-- **COCO budget** — measured in true function calls only; SCR controls how efficiently each true call is used
+- **Calibration** — a surrogate is calibrated when σ(x) is large where the prediction error is large and small where it is small; poorly-calibrated σ leads to bad acquisition decisions
+- **Gap to optimum** — `gap = best_f_found − f*`; plot on log scale to compare convergence speed across surrogates
+- **Convergence curve** — best-so-far vs BO iteration, averaged across random seeds to reduce noise
+- **Cost per refit** — how long each surrogate takes to refit when a new point is added; this scales with BO budget
+- **GP advantage** — analytic posterior, calibrated σ, cheap; but cubic cost in n and struggles above ~20D
+- **MC Dropout advantage** — single network, cheap to train; but noisy σ, stochastic at inference
+- **Deep Ensemble advantage** — smooth, structured σ; but N× training cost per refit
 
 ---
 
@@ -36,7 +23,7 @@ If the surrogate's prediction `μ(x)` is used as the fitness value `y` and that 
 | File | Purpose |
 |---|---|
 | `README.md` | This file |
-| `notebook.ipynb` | Interactive — change SCR ceiling, compare convergence per true eval |
+| `notebook.ipynb` | Interactive — change seeds, iter count, compare methods |
 | `main.py` | Standalone script — saves all plots to `output/` |
 
 ---
@@ -50,6 +37,10 @@ source .venv/bin/activate
 python lesson-13/main.py
 ```
 
+> **Runtime warning**: the convergence experiment trains each surrogate from scratch at every BO step.  
+> Expected runtime: 8–15 minutes depending on hardware.  
+> Progress is printed to the terminal.
+
 ### Run the notebook
 
 ```bash
@@ -61,34 +52,34 @@ jupyter notebook lesson-13/notebook.ipynb
 
 ## What You Will Build
 
-### Part 1 — The SCR concept
-Illustrate how the enforcer distributes true vs. surrogate calls across 25 BO steps for three SCR ceilings: 0%, 20%, 40%. Show which steps call the true function (green) and which use the surrogate (orange).
+### Part 1 — Fit comparison on Forrester
+Three panels side by side: GP | MC Dropout | Deep Ensemble, each fitted on the same 15 training points. Show mean ± 2σ. Are the mean fits equally good? Where does σ differ?
 
-### Part 2 — Surrogate ranking quality
-Generate 40 candidates, evaluate all with both the true function and the GP. Plot Spearman rank correlation ρ. High ρ is the prerequisite for trusting the surrogate's ranking when SCR > 0.
+### Part 2 — Uncertainty calibration on Forrester
+Plot σ(x) for all three methods on the same axis. Then compare |μ(x) − f(x)| (prediction error) with σ(x) — a well-calibrated surrogate has large σ where its error is large.
 
-### Part 3 — SCR-controlled BO
-Run a single BO with SCR ceiling = 20%. Track and plot the running SCR at each step. Show the enforcer keeping it at or below the ceiling.
+### Part 3 — BO convergence on Forrester
+Run 3 seeds × 20 BO iterations for each surrogate. Plot: (1) best f found so far, and (2) gap to optimum on log scale. Shows which surrogate converges fastest in 1D.
 
-### Part 4 — SCR sensitivity: convergence per true evaluation
-Run the BO at SCR = 0%, 10%, 20%, 40%. X-axis = true function calls (COCO budget). Show that moderate SCR (10–20%) is nearly as good as pure BO but uses fewer true evaluations.
+### Part 4 — Fit comparison on Branin (2D)
+Contour plots of μ and σ for all three surrogates on the 2D Branin domain. 2×3 grid: top row = mean, bottom row = uncertainty. Shows how uncertainty spreads in 2D.
 
-### Part 5 — Budget breakdown
-After 30 iterations, compare how many evaluations were true vs. surrogate-only for each SCR setting. Show the trade-off between budget saved and SCR level.
+### Part 5 — BO convergence on Branin
+Same as Part 3 but on Branin (2D). Which surrogate handles the higher-dimensional search best?
 
-### Part 6 — COCO-compatible BO
-Full BO with hard true-evaluation budget. X-axis = true function calls only (COCO budget counter). Compare SCR=0% vs. SCR=20% convergence on Forrester.
+### Part 6 — Computational cost
+Measure and plot the wall-clock time per surrogate refit. Bar chart: GP vs MC Dropout vs Deep Ensemble at 1000 epochs. The cost ratio is the main practical consideration when scaling BO.
 
 ---
 
 ## Exercises
 
-1. In Part 2, reduce training data from 15 to 5 points. Does rank correlation ρ drop? What SCR is safe when ρ is low?
-2. In Part 4, add SCR = 60% and SCR = 80%. At what SCR does convergence clearly worsen due to surrogate drift?
-3. In Part 6, increase `TRUE_BUDGET = 80`. With SCR = 20%, does the BO converge to f* ≈ -6.021?
+1. In Part 3, increase `N_ITER = 30`. At what iteration do all three surrogates converge? Does GP maintain its lead as the budget grows?
+2. In Part 4, inspect the σ contour for each surrogate in the corners of the domain (far from training points). Which surrogate shows the most uncertainty there? Which shows the least?
+3. In Part 6, add `N_MEMBERS = 3` and re-run Part 3. Does a smaller ensemble converge similarly to `N_MEMBERS = 5` while being cheaper?
 
 ---
 
 ## What's Next
 
-**Lesson 14** — All surrogates comparison with SCR < 20% enforced: GP, MC Dropout, Deep Ensembles, RBF, and Random Forest side-by-side on Forrester and Branin.
+**Lesson 13** — Surrogate Control Ratio (SCR): deciding when to use the surrogate vs. the true function. Without SCR, the surrogate may dominate too many evaluations, violating the budget constraint needed for valid COCO results.

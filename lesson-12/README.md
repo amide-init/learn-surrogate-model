@@ -1,85 +1,58 @@
-# Lesson 12 — MC Dropout vs Deep Ensembles vs GP
+# Lesson 12 — CMA-ES as the Acquisition Optimiser (Deep Ensembles)
 
 ## Objective
-
-Run a head-to-head comparison of all three surrogates on the same benchmarks (Forrester 1D and Branin 2D) — mean fit quality, uncertainty calibration, BO convergence speed, and computational cost.
-
----
+Replace random candidate sampling with CMA-ES to maximise the Expected Improvement (EI) acquisition function over a Deep Ensemble surrogate, and show why this matters as problem dimension grows.
 
 ## Concepts
+- **CMA-ES** (Covariance Matrix Adaptation Evolution Strategy): a derivative-free evolutionary optimiser that adapts its search distribution to the landscape of the objective.
+- **Acquisition optimisation**: finding the input x that maximises EI (or UCB). In low dimensions random sampling works; in higher dimensions it fails badly.
+- **Curse of dimensionality**: 2000 random candidates cover a negligible fraction of a 6D unit cube — CMA-ES explores systematically instead.
+- **EI via Deep Ensembles**: EI needs μ(x) and σ(x); the ensemble provides both without dropout or GP fitting.
+- **BO loop with CMA-ES**: fit ensemble → CMA-ES maximises EI → evaluate → repeat.
 
-- **Calibration** — a surrogate is calibrated when σ(x) is large where the prediction error is large and small where it is small; poorly-calibrated σ leads to bad acquisition decisions
-- **Gap to optimum** — `gap = best_f_found − f*`; plot on log scale to compare convergence speed across surrogates
-- **Convergence curve** — best-so-far vs BO iteration, averaged across random seeds to reduce noise
-- **Cost per refit** — how long each surrogate takes to refit when a new point is added; this scales with BO budget
-- **GP advantage** — analytic posterior, calibrated σ, cheap; but cubic cost in n and struggles above ~20D
-- **MC Dropout advantage** — single network, cheap to train; but noisy σ, stochastic at inference
-- **Deep Ensemble advantage** — smooth, structured σ; but N× training cost per refit
+## Architecture (Deep Ensemble — unchanged from Lesson 11)
+```
+5 × [Input(d) → Linear(64) → ReLU → Linear(64) → ReLU → Linear(1)]
+μ = mean of 5 outputs,  σ = std of 5 outputs
+EI(x) = (f_best − μ) · Φ(Z) + σ · φ(Z),   Z = (f_best − μ) / σ
+```
 
----
+## CMA-ES role
+```
+x_next = argmax_{x ∈ [0,1]^d} EI(x)
 
-## Files
-
-| File | Purpose |
-|---|---|
-| `README.md` | This file |
-| `notebook.ipynb` | Interactive — change seeds, iter count, compare methods |
-| `main.py` | Standalone script — saves all plots to `output/` |
-
----
+Random:  sample 2000 random candidates → pick highest EI   (works in 1D–2D)
+CMA-ES:  start from x0 ∈ [0,1]^d, σ=0.3
+         iterate: ask → evaluate neg_EI → tell → adapt covariance
+         converges in ~100–200 function evaluations of EI
+```
 
 ## Instructions
 
-### Run the script
-
 ```bash
 source .venv/bin/activate
+
+# Script (~15–25 min depending on hardware)
 python lesson-12/main.py
-```
 
-> **Runtime warning**: the convergence experiment trains each surrogate from scratch at every BO step.  
-> Expected runtime: 8–15 minutes depending on hardware.  
-> Progress is printed to the terminal.
-
-### Run the notebook
-
-```bash
-source .venv/bin/activate
+# Notebook
 jupyter notebook lesson-12/notebook.ipynb
 ```
 
----
-
-## What You Will Build
-
-### Part 1 — Fit comparison on Forrester
-Three panels side by side: GP | MC Dropout | Deep Ensemble, each fitted on the same 15 training points. Show mean ± 2σ. Are the mean fits equally good? Where does σ differ?
-
-### Part 2 — Uncertainty calibration on Forrester
-Plot σ(x) for all three methods on the same axis. Then compare |μ(x) − f(x)| (prediction error) with σ(x) — a well-calibrated surrogate has large σ where its error is large.
-
-### Part 3 — BO convergence on Forrester
-Run 3 seeds × 20 BO iterations for each surrogate. Plot: (1) best f found so far, and (2) gap to optimum on log scale. Shows which surrogate converges fastest in 1D.
-
-### Part 4 — Fit comparison on Branin (2D)
-Contour plots of μ and σ for all three surrogates on the 2D Branin domain. 2×3 grid: top row = mean, bottom row = uncertainty. Shows how uncertainty spreads in 2D.
-
-### Part 5 — BO convergence on Branin
-Same as Part 3 but on Branin (2D). Which surrogate handles the higher-dimensional search best?
-
-### Part 6 — Computational cost
-Measure and plot the wall-clock time per surrogate refit. Bar chart: GP vs MC Dropout vs Deep Ensemble at 1000 epochs. The cost ratio is the main practical consideration when scaling BO.
-
----
+## Outputs (lesson-12/output/)
+| File | Description |
+|---|---|
+| `part1_cmaes_mechanics.png` | CMA-ES convergence on Forrester EI |
+| `part2_acq_quality.png` | CMA-ES vs random EI quality across 1D / 2D / 6D |
+| `part3_convergence_forrester.png` | BO convergence — Forrester 1D |
+| `part4_convergence_branin.png` | BO convergence — Branin 2D |
+| `part5_convergence_hartmann6.png` | BO convergence — Hartmann-6 (6D) |
+| `part6_trace_hartmann6.png` | Detailed BO trace, best seed, Hartmann-6 |
 
 ## Exercises
+1. Change `N_MEMBERS = 5` to `N_MEMBERS = 1` (single network). Does CMA-ES still outperform random? Why might σ quality matter?
+2. Replace EI with UCB (`μ − β·σ`, β = 2) and repeat Part 3. Does CMA-ES advantage change?
+3. Increase `n_cand = 2000` to `20000` for random search. At what dimension does CMA-ES still win?
 
-1. In Part 3, increase `N_ITER = 30`. At what iteration do all three surrogates converge? Does GP maintain its lead as the budget grows?
-2. In Part 4, inspect the σ contour for each surrogate in the corners of the domain (far from training points). Which surrogate shows the most uncertainty there? Which shows the least?
-3. In Part 6, add `N_MEMBERS = 3` and re-run Part 3. Does a smaller ensemble converge similarly to `N_MEMBERS = 5` while being cheaper?
-
----
-
-## What's Next
-
-**Lesson 13** — Surrogate Control Ratio (SCR): deciding when to use the surrogate vs. the true function. Without SCR, the surrogate may dominate too many evaluations, violating the budget constraint needed for valid COCO results.
+## What's next
+Lesson 13 — head-to-head comparison: GP vs MC Dropout vs Deep Ensembles (all using CMA-ES acquisition).

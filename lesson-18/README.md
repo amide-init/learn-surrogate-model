@@ -1,19 +1,32 @@
-# Lesson 18 — Statistical Analysis and Paper Figures
+# Lesson 17 — COCO / BBOB Benchmark
 
 ## Objective
 
-Re-run all key experiments with enough seeds for statistical power, apply non-parametric significance tests, compute bootstrap confidence intervals, and produce publication-quality figures and a results table for the research paper.
+Evaluate all five surrogates on four representative BBOB functions (Sphere, Ellipsoidal, Rosenbrock, Rastrigin) using the cocoex test suite, COCO-correct true-call counting, and a simplified performance profile.
 
 ---
 
 ## Concepts
 
-- **Bootstrap confidence interval** — resample seeds with replacement to estimate the CI on the median convergence curve without assuming normality
-- **Wilcoxon signed-rank test** — non-parametric pairwise test comparing two surrogates across matched seeds; p < 0.05 indicates a significant difference
-- **Friedman test** — non-parametric extension of repeated-measures ANOVA; tests whether any surrogate is significantly different from the others across multiple functions
-- **Effect size (rank-biserial r)** — how large the difference is, independent of sample size; r > 0.5 = large effect
-- **Publication figure** — clean typography, line-style-safe for B&W printing, 95% CI bands, correct axis labels
-- **Results table** — median gap ± IQR, win rate vs GP baseline, recommended SCR — the main table for the paper
+- **BBOB suite** — 24 noiseless black-box functions from the COCO framework, each with instance-specific rotations and offsets; covers unimodal, ill-conditioned, multimodal landscapes
+- **cocoex** — Python library providing BBOB functions as callable objects; inputs on [−5, 5]^d
+- **Budget** — total number of true function evaluations; COCO standard = 100 × d; here we use a smaller budget for speed
+- **Performance profile** — fraction of (seed, target) pairs solved within a given budget; x = true calls, y = fraction solved
+- **Target** — a gap threshold τ; a run is "solved" when gap = f(x_best) − f* < τ
+- **f_opt** — the true function minimum; estimated via multi-start scipy.minimize since BBOB optima are instance-specific
+- **Dimension scaling** — how each surrogate's final gap grows as d increases from 2 to 5
+- **SCR ≤ 20%** — same enforcer as all previous lessons
+
+---
+
+## BBOB Functions Used
+
+| ID | Name | Character |
+|---|---|---|
+| f1 | Sphere | Unimodal, separable, easy |
+| f2 | Ellipsoidal | Unimodal, ill-conditioned (λ_max/λ_min = 10⁶) |
+| f8 | Rosenbrock | Narrow banana-shaped valley, deceptive |
+| f15 | Rastrigin | Highly multimodal, many local minima |
 
 ---
 
@@ -22,8 +35,8 @@ Re-run all key experiments with enough seeds for statistical power, apply non-pa
 | File | Purpose |
 |---|---|
 | `README.md` | This file |
-| `main.py` | Standalone script — saves all plots and prints the results table |
-| `notebook.ipynb` | Interactive — reproduce each figure and inspect the statistics |
+| `main.py` | Standalone script — saves all plots to `output/` |
+| `notebook.ipynb` | Interactive — explore each BBOB function and compare surrogates |
 
 ---
 
@@ -33,48 +46,48 @@ Re-run all key experiments with enough seeds for statistical power, apply non-pa
 
 ```bash
 source .venv/bin/activate
-python lesson-18/main.py
+python lesson-17/main.py
 ```
 
 ### Run the notebook
 
 ```bash
 source .venv/bin/activate
-jupyter notebook lesson-18/notebook.ipynb
+jupyter notebook lesson-17/notebook.ipynb
 ```
 
 ---
 
 ## What You Will Build
 
-### Part 1 — Bootstrap convergence curves (Forrester 1D)
-5 seeds per surrogate. Median + 95% bootstrap CI bands. This is the primary convergence figure — used directly in the paper.
+### Part 1 — BBOB function gallery
+2D landscape contour plots of all four BBOB functions at d=2. Shows the landscape character before any optimisation.
 
-### Part 2 — Final gap distribution (box plots)
-Box plots of final gap across all seeds. Reveals variance and outliers that the convergence curve hides. Identifies which surrogates are consistent vs volatile.
+### Part 2 — Convergence on Sphere (f1, d=2)
+All 5 surrogates × 3 seeds × SCR≤20% BO. Convergence curves (true calls vs gap). Sphere is the easiest — every surrogate should converge well.
 
-### Part 3 — Wilcoxon pairwise significance (Forrester 1D)
-All 5×5 surrogate pairs tested with the Wilcoxon signed-rank test. Heatmap of p-values with significance markers (✓ = p < 0.05). Note how small N_SEEDS makes many differences non-significant.
+### Part 3 — Performance profile (f1, d=2)
+For each surrogate: fraction of (seed, target) combinations solved within budget. Targets = {10, 1, 0.1, 0.01}. A faster rising curve = better anytime performance.
 
-### Part 4 — BBOB multi-function bar chart with error bars
-Final gap (median ± IQR) across 3 BBOB functions for each surrogate. Grouped bar chart with error bars. Friedman test result printed below the chart.
+### Part 4 — Multi-function heatmap
+Run all surrogates on all 4 BBOB functions. Heatmap: rows = surrogates, columns = functions, cell = log₁₀(final gap). Reveals which surrogate is best for which landscape type.
 
-### Part 5 — Paper Figure 1: main convergence comparison
-Publication-quality 2-panel figure: Forrester (1D) and Branin (2D). Larger fonts, line styles safe for B&W printing, tight layout, ready for LaTeX \includegraphics.
+### Part 5 — Dimension scaling (Sphere: d=2 vs d=5)
+Compare final gap at d=2 and d=5 for each surrogate. Shows how performance degrades as dimension increases.
 
-### Part 6 — Results table
-Summary table: surrogate × {median gap Forrester, median gap Branin, BBOB avg rank, recommended SCR}. Printed in Markdown and LaTeX format for copy-paste into the paper.
+### Part 6 — Leaderboard
+Rank surrogates by average performance across all 4 BBOB functions. Shows the overall best surrogate for BBOB-style benchmarks.
 
 ---
 
 ## Exercises
 
-1. In Part 3, increase `N_SEEDS = 10` and re-run. How many more surrogate pairs become statistically significant? What does this tell you about experiment design?
-2. In Part 1, does the 95% CI for GP and Deep Ensemble overlap? If so, can you claim GP is better in the paper?
-3. In Part 5, try switching to grayscale by setting `PAPER_COLORS = ['black']*5` and relying solely on `PAPER_STYLES`. Is the figure still readable?
+1. In Part 4, which function is hardest for all surrogates? Is this consistent with the landscape character shown in Part 1?
+2. In Part 3, does GP hit the tightest target (τ=0.01) more reliably than neural network surrogates? What does this say about calibration?
+3. In Part 5, try `DIM_HD = 10`. Which surrogate degrades least? Does this match the finding from Lesson 15?
 
 ---
 
 ## What's Next
 
-**Lesson 19** — Writing the research paper: structure, abstract, related work, and how to present surrogate-assisted optimisation results to reviewers.
+**Lesson 18** — Statistical analysis and paper figures: aggregate results across all lessons, compute significance tests, and produce publication-quality plots.

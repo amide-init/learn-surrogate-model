@@ -31,7 +31,8 @@ Predict: run all 5 networks → mean μ, variance σ² across outputs
 - Better calibrated uncertainty than MC Dropout
 - Reference: Lakshminarayanan et al. (2017)
 
-**Lesson 12 compares both methods head-to-head** — this comparison is a core paper result.
+**Lesson 12** introduces CMA-ES as the acquisition optimiser paired with Deep Ensembles.  
+**Lesson 13 compares all three surrogates head-to-head** — this comparison is a core paper result.
 
 **When implementing surrogates:** implement both NN methods. GP is always a baseline.
 
@@ -89,14 +90,15 @@ Additional Python files are allowed inside a lesson folder if the lesson needs h
 | `lesson-9` | PyTorch basics: tensors, `nn.Module`, training loop | NN tooling |
 | `lesson-10` | **NN surrogate + MC Dropout** | **Main contribution A** |
 | `lesson-11` | **NN surrogate + Deep Ensembles** | **Main contribution B** |
-| `lesson-12` | MC Dropout vs. Deep Ensembles vs. GP | Core comparison |
-| `lesson-13` | **Surrogate control strategies (SCR)** | **Critical concept** |
-| `lesson-14` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
-| `lesson-15` | Noise handling and high-dimensional inputs | Robustness |
-| `lesson-16` | **SCR sensitivity — varying surrogate usage from 0% to 80%** | **SCR tuning** |
-| `lesson-17` | COCO / BBOB benchmark | Evaluation |
-| `lesson-18` | Statistical analysis and paper figures | Results |
-| `lesson-19` | Writing the research paper | Paper |
+| `lesson-12` | **CMA-ES acquisition optimiser + Deep Ensembles** | **Acquisition engine** |
+| `lesson-13` | MC Dropout vs. Deep Ensembles vs. GP | Core comparison |
+| `lesson-14` | **Surrogate control strategies (SCR)** | **Critical concept** |
+| `lesson-15` | All surrogates comparison (NN, GP, RBF, RF) | Experiments |
+| `lesson-16` | Noise handling and high-dimensional inputs | Robustness |
+| `lesson-17` | **SCR sensitivity — varying surrogate usage from 0% to 80%** | **SCR tuning** |
+| `lesson-18` | COCO / BBOB benchmark | Evaluation |
+| `lesson-19` | Statistical analysis and paper figures | Results |
+| `lesson-20` | Writing the research paper | Paper |
 
 ---
 
@@ -109,7 +111,7 @@ learn-surrogate/
 │   ├── notebook.ipynb
 │   ├── main.py
 │   └── output/
-├── lesson-2/ ... lesson-15/
+├── lesson-2/ ... lesson-20/
 ├── results/             # Shared benchmark outputs (gitignored)
 └── requirements.txt
 ```
@@ -143,7 +145,7 @@ jupyter notebook lesson-N/notebook.ipynb
 
 ---
 
-## COCO-specific Notes (Lesson 13)
+## COCO-specific Notes (Lesson 18)
 
 - Use `coco-experiment` (`import cocoex`) for running experiments, `cocopp` for post-processing
 - COCO output goes in `results/exdata/` (gitignored)
@@ -158,7 +160,7 @@ jupyter notebook lesson-N/notebook.ipynb
 - Do not skip lessons — each one introduces a concept the next depends on
 - Do not use GP as the main model — it is always a baseline
 - Do not skip Lesson 10 before Lesson 11 — Deep Ensembles build on the same BO loop
-- Do not skip Lesson 13 (SCR) before Lesson 16 (COCO) — without correct surrogate control, COCO results are invalid
+- Do not skip Lesson 14 (SCR) before Lesson 18 (COCO) — without correct surrogate control, COCO results are invalid
 - Surrogate control ratio (SCR) must be < 20% in all experiments — the surrogate must save real evaluations
 - Do not add abstractions before they are needed
 - Do not introduce PyTorch before Lesson 9

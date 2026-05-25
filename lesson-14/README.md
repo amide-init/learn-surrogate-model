@@ -1,31 +1,33 @@
-# Lesson 14 — All Surrogates Comparison
+# Lesson 13 — Surrogate Control Ratio (SCR)
 
 ## Objective
 
-Compare GP, MC Dropout, Deep Ensembles, RBF, and Random Forest inside the SCR ≤ 20% enforcer BO loop on Forrester (1D) and Branin (2D).
+Understand what SCR is, why it must stay below 20% for valid surrogate-assisted optimisation, and implement an SCR enforcer inside the BO loop.
+
+---
+
+## Core definition
+
+```
+SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)
+```
+
+- **SCR = 0%** — pure BO: every accepted point is truly evaluated
+- **SCR = 20%** — 1 in 5 evaluations uses the surrogate prediction as fitness (saves 1 true eval per 5 steps)
+- **SCR > 20%** — risky: training on too many surrogate-predicted y values causes surrogate drift
+
+### Why SCR must be controlled
+If the surrogate's prediction `μ(x)` is used as the fitness value `y` and that point is added back to the training dataset, the surrogate then trains on its own errors. Over many steps this causes **surrogate drift** — the model becomes increasingly inaccurate while appearing confident.
 
 ---
 
 ## Concepts
 
-- **Unified surrogate interface** — all surrogates expose `predict(X_cand) → μ, σ`; the SCR enforcer loop is identical for all
-- **SCR ≤ 20% enforced** — `SCR = surrogate_only_calls / (true_calls + surrogate_only_calls)` capped at 20% using the enforcer from Lesson 13
-- **Rank correlation** — Spearman ρ measures how well each surrogate ranks candidates; high ρ → surrogate-only steps are trustworthy
-- **Convergence per true evaluation** — COCO-correct comparison; x-axis = true function calls only
-- **Calibration** — σ should track |μ(x) − f(x)|; GP is best-calibrated, RBF uses a distance proxy, RF uses tree variance
-- **Speed vs. quality trade-off** — GP and RBF are fast; Deep Ensembles are slow but better calibrated
-
----
-
-## Surrogates
-
-| Model | Uncertainty source | Speed |
-|---|---|---|
-| GP | Posterior variance (Matérn-5/2) | Fast |
-| MC Dropout | Variance across T=50 forward passes (dropout ON at inference) | Moderate |
-| Deep Ensembles | Variance across 5 independently trained networks | Slow |
-| RBF | Distance to nearest training point (proxy) | Fast |
-| Random Forest | Variance across 100 tree predictions | Fast |
+- **SCR enforcer** — before each BO step, check: "if I use the surrogate now, will SCR exceed the ceiling?" If yes → call the true function
+- **Projected SCR** — `(surr_calls + 1) / (true_calls + surr_calls + 1)`; compare to `scr_max` before deciding
+- **Rank correlation** — Spearman ρ between surrogate ranking and true ranking; high ρ means prescreening is trustworthy
+- **Surrogate drift** — if surrogate-predicted y values are added back as training data, the surrogate trains on its own errors
+- **COCO budget** — measured in true function calls only; SCR controls how efficiently each true call is used
 
 ---
 
@@ -34,8 +36,8 @@ Compare GP, MC Dropout, Deep Ensembles, RBF, and Random Forest inside the SCR �
 | File | Purpose |
 |---|---|
 | `README.md` | This file |
+| `notebook.ipynb` | Interactive — change SCR ceiling, compare convergence per true eval |
 | `main.py` | Standalone script — saves all plots to `output/` |
-| `notebook.ipynb` | Interactive — explore each surrogate and compare |
 
 ---
 
@@ -59,34 +61,34 @@ jupyter notebook lesson-14/notebook.ipynb
 
 ## What You Will Build
 
-### Part 1 — Fit quality on Forrester
-All 5 surrogates fitted to the same 15 training points. Plot μ ± 2σ for each. Compare uncertainty shape qualitatively.
+### Part 1 — The SCR concept
+Illustrate how the enforcer distributes true vs. surrogate calls across 25 BO steps for three SCR ceilings: 0%, 20%, 40%. Show which steps call the true function (green) and which use the surrogate (orange).
 
-### Part 2 — Rank correlation
-Generate 40 candidates. Compute Spearman ρ between true f and surrogate μ for all 5 models. Bar chart of ρ values — determines which surrogates are safe for surrogate-only steps.
+### Part 2 — Surrogate ranking quality
+Generate 40 candidates, evaluate all with both the true function and the GP. Plot Spearman rank correlation ρ. High ρ is the prerequisite for trusting the surrogate's ranking when SCR > 0.
 
-### Part 3 — BO convergence on Forrester (1D)
-Run SCR-enforced BO (SCR ≤ 20%, 30 iterations, 3 seeds) for all 5 surrogates. X-axis = true function calls.
+### Part 3 — SCR-controlled BO
+Run a single BO with SCR ceiling = 20%. Track and plot the running SCR at each step. Show the enforcer keeping it at or below the ceiling.
 
-### Part 4 — BO convergence on Branin (2D)
-Same loop on Branin. Tests whether surrogate quality generalises to higher dimensions.
+### Part 4 — SCR sensitivity: convergence per true evaluation
+Run the BO at SCR = 0%, 10%, 20%, 40%. X-axis = true function calls (COCO budget). Show that moderate SCR (10–20%) is nearly as good as pure BO but uses fewer true evaluations.
 
-### Part 5 — Speed comparison
-Time the fit + predict step for each surrogate. Bar chart of wall-clock time per BO iteration.
+### Part 5 — Budget breakdown
+After 30 iterations, compare how many evaluations were true vs. surrogate-only for each SCR setting. Show the trade-off between budget saved and SCR level.
 
-### Part 6 — Leaderboard
-Summary: final gap to optimum + speed for each surrogate × benchmark. Identify the best speed-quality trade-off.
+### Part 6 — COCO-compatible BO
+Full BO with hard true-evaluation budget. X-axis = true function calls only (COCO budget counter). Compare SCR=0% vs. SCR=20% convergence on Forrester.
 
 ---
 
 ## Exercises
 
-1. In Part 2, which surrogate has the lowest Spearman ρ? Does that explain its BO convergence in Part 3?
-2. In Part 3, increase `EPOCHS_BO` from 500 to 1000 for MC Dropout and Deep Ensembles. Does convergence improve?
-3. In Part 4 on Branin, try `N_INIT_2D = 5` (very few initial points). Which surrogate degrades most?
+1. In Part 2, reduce training data from 15 to 5 points. Does rank correlation ρ drop? What SCR is safe when ρ is low?
+2. In Part 4, add SCR = 60% and SCR = 80%. At what SCR does convergence clearly worsen due to surrogate drift?
+3. In Part 6, increase `TRUE_BUDGET = 80`. With SCR = 20%, does the BO converge to f* ≈ -6.021?
 
 ---
 
 ## What's Next
 
-**Lesson 15** — Noise handling and high-dimensional inputs: how each surrogate behaves when f(x) is noisy or d > 5.
+**Lesson 14** — All surrogates comparison with SCR < 20% enforced: GP, MC Dropout, Deep Ensembles, RBF, and Random Forest side-by-side on Forrester and Branin.
