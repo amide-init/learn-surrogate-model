@@ -1,12 +1,13 @@
 # Virtual environment
 .venv/
-
+compare/
 # Lesson outputs
 lesson-*/output/
-
-# COCO benchmark output
+project-*/exdata/
+# COCO benchmark output and project results
 results/
 benchmark/exdata/
+project-*/results/
 
 # Jupyter
 .ipynb_checkpoints/

@@ -112,6 +112,11 @@ learn-surrogate/
 │   ├── main.py
 │   └── output/
 ├── lesson-2/ ... lesson-20/
+├── project-1/           # Full COCO experiment (Deep Ensembles + CMA-ES)
+│   ├── README.md
+│   ├── main.py
+│   ├── surrogate.py
+│   └── results/         # Gitignored — dim_{d}_fun_{f}.npy outputs
 ├── results/             # Shared benchmark outputs (gitignored)
 └── requirements.txt
 ```
@@ -152,6 +157,37 @@ jupyter notebook lesson-N/notebook.ipynb
 - Default budget: `100 * dimension` evaluations for early runs
 - Baselines to include: GP-BO, CMA-ES, random search
 - Always pass `random_seed` for reproducibility
+
+---
+
+## Projects
+
+Projects apply the full pipeline — COCO benchmark, real surrogate, real budget — to produce results for the paper.
+
+### Project 1 — Deep Ensemble + CMA-ES on COCO/BBOB
+
+**Location:** `project-1/`
+
+**Files:**
+- `surrogate.py` — `DeepEnsemble` class (5 networks, normalised I/O, `fit` / `predict`)
+- `main.py` — experiment loop: LHS init → CMA-ES search with surrogate pre-screening → save results
+
+**Algorithm:** LHS initialisation → Deep Ensemble surrogate → CMA-ES with surrogate pre-screening (top `SCR` fraction evaluated on real function) → retrain on real evaluations → repeat.
+
+**Key variables in `main.py`:**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BUDGET_FACTOR` | 100 | Real evals = `BUDGET_FACTOR × dim` |
+| `SCR` | 0.2 | Fraction of CMA-ES candidates that use the real function |
+| `N_INIT_FACTOR` | 5 | LHS points = `N_INIT_FACTOR × dim` |
+| `N_INSTANCES` | 15 | COCO instances per (function, dimension) |
+| `DIMENSIONS` | [2, 5, 10] | Tested dimensions |
+| `FUNCTION_IDS` | range(1, 25) | BBOB function indices to run |
+
+**Results format:** `project-1/results/dim_{d}_fun_{f}.npy` — shape `(N_INSTANCES, budget)` of best-so-far values indexed by real evaluation count.
+
+**Future comparisons:** lq-CMA-ES, LMM-CMA-ES, DTS-CMA-ES.
 
 ---
 
