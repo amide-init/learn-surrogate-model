@@ -90,7 +90,7 @@ class DeepEnsemble:
         for m in self.members:
             m.eval()
             with torch.no_grad():
-                preds.append(m(x).squeeze().numpy())
+                preds.append(m(x).squeeze(-1).numpy())
         preds = np.array(preds)          # (N, n_points)
         return preds.mean(0), preds.std(0)
 
@@ -122,8 +122,8 @@ def build_ei_fn(ensemble, Xm, Xs, ym, ys, f_best, dim):
         x_unit = np.asarray(x_unit).reshape(1, dim)
         x_std  = (x_unit - Xm) / Xs
         mu_s, std_s = ensemble.predict_np(x_std)
-        mu  = float(mu_s[0])  * ys + ym
-        std = float(std_s[0]) * ys
+        mu  = float(np.squeeze(mu_s))  * ys + ym
+        std = float(np.squeeze(std_s)) * ys
         return float(-ei(np.array([mu]), np.array([std]), f_best)[0])
     return neg_ei
 
