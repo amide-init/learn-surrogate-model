@@ -13,22 +13,23 @@ RANDOM_SEED = 42
 # CONFIG
 # =========================================================
 
-BUDGET_FACTOR = 1000
+BUDGET_FACTOR = 250
 
-# Initial real samples
-N_INIT_FACTOR = 20
+N_INIT_FACTOR = 10
 
-# Retrain surrogate every N new real points
 RETRAIN_EVERY = 10
 
-# Number of BBOB instances
 N_INSTANCES = 15
 
 DIMENSIONS = [2]
-FUNCTION_IDS = [1, 2, 3]
 
-# Exploration coefficient for LCB
-KAPPA = 2.0
+FUNCTION_IDS = [2]
+
+KAPPA = 1.0
+
+PRESCREEN_POP = 15
+
+LOCAL_TRAIN_SIZE = 200
 
 np.random.seed(RANDOM_SEED)
 
@@ -41,57 +42,54 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
 # =========================================================
-# LHS SAMPLING
+# LHS
 # =========================================================
 
 def lhs_sample(n, lb, ub, seed):
-    sampler = LatinHypercube(d=len(lb), seed=seed)
+
+    sampler = LatinHypercube(
+        d=len(lb),
+        seed=seed
+    )
+
     unit = sampler.random(n)
+
     return lb + unit * (ub - lb)
 
 
 # =========================================================
-# NORMALIZATION HELPERS
-# =========================================================
-
-def normalize_y(y):
-    mean = np.mean(y)
-    std = np.std(y) + 1e-8
-    y_norm = (y - mean) / std
-    return y_norm, mean, std
-
-
-def denormalize_y(y_norm, mean, std):
-    return y_norm * std + mean
-
-
-# =========================================================
-# DYNAMIC SCR
+# SCR
 # =========================================================
 
 def get_scr(n_real, budget):
-    """
-    Early stage:
-        more real evaluations
-
-    Later:
-        more surrogate usage
-    """
 
     progress = n_real / budget
 
     if progress < 0.3:
-        return 0.8
-
-    elif progress < 0.6:
         return 0.5
 
+    elif progress < 0.7:
+        return 0.3
+
     else:
-        return 0.2
+        return 0.1
 
 
 # =========================================================
-# MAIN OPTIMIZATION LOOP
+# LOCAL DATASET
+# =========================================================
+
+def get_local_dataset(X, y, center, k):
+
+    dist = np.linalg.norm(X - center, axis=1)
+
+    idx = np.argsort(dist)[:min(k, len(X))]
+
+    return X[idx], y[idx]
+
+
+# =========================================================
+# MAIN LOOP
 # =========================================================
 
 def run_instance(fun, dim, budget, seed):
@@ -114,18 +112,20 @@ def run_instance(fun, dim, budget, seed):
     history = [best] * n_init
 
     # -----------------------------------------------------
-    # NORMALIZE TARGETS
-    # -----------------------------------------------------
-
-    y_norm, y_mean, y_std = normalize_y(y)
-
-    # -----------------------------------------------------
-    # TRAIN INITIAL SURROGATE
+    # MODEL
     # -----------------------------------------------------
 
     model = DeepEnsemble(d=dim)
 
-    model.fit(X, y_norm)
+    # -----------------------------------------------------
+    # RANK-BASED TRAINING TARGET
+    # -----------------------------------------------------
+
+    ranks = np.argsort(np.argsort(y)).astype(np.float32)
+
+    y_train = ranks / max(ranks.max(), 1)
+
+    model.fit(X, y_train)
 
     # -----------------------------------------------------
     # CMA-ES
@@ -142,13 +142,14 @@ def run_instance(fun, dim, budget, seed):
             "bounds": [lb.tolist(), ub.tolist()],
             "seed": seed,
             "verbose": -9,
-            "tolx": 1e-12,
-            "tolfun": 1e-12,
         }
     )
 
     n_real = n_init
+
     n_since_retrain = 0
+
+    refit_count = 0
 
     # =====================================================
     # LOOP
@@ -157,10 +158,10 @@ def run_instance(fun, dim, budget, seed):
     while not es.stop() and n_real < budget:
 
         # -------------------------------------------------
-        # ASK CMA
+        # PRESCREENING
         # -------------------------------------------------
 
-        solutions = es.ask()
+        solutions = es.ask(PRESCREEN_POP)
 
         candidates = np.array(solutions)
 
@@ -168,43 +169,64 @@ def run_instance(fun, dim, budget, seed):
         # SURROGATE PREDICTION
         # -------------------------------------------------
 
-        mu_norm, sigma_norm = model.predict(candidates)
+        mu, sigma = model.predict(candidates)
 
-        mu = denormalize_y(mu_norm, y_mean, y_std)
+        # ---------------------------------------------
+        # DYNAMIC KAPPA
+        # ---------------------------------------------
 
-        sigma = sigma_norm * y_std
+        progress = n_real / budget
+
+        if progress < 0.5:
+            kappa = 1.0
+        else:
+            kappa = 0.3
+
+        acquisition = mu - kappa * sigma
 
         # -------------------------------------------------
-        # LOWER CONFIDENCE BOUND
-        # -------------------------------------------------
-
-        acquisition = mu - KAPPA * sigma
-
-        # -------------------------------------------------
-        # DYNAMIC SCR
+        # SCR
         # -------------------------------------------------
 
         SCR = get_scr(n_real, budget)
 
-        n_eval = max(1, round(SCR * len(candidates)))
-
-        # Evaluate best acquisition candidates
-        real_idx = np.argsort(acquisition)[:n_eval]
+        n_eval = max(
+            1,
+            round(SCR * len(candidates))
+        )
 
         # -------------------------------------------------
-        # IMPORTANT:
-        # Use surrogate predictions for ALL candidates
-        # instead of harsh penalties
+        # SELECT BEST CANDIDATES ONLY
         # -------------------------------------------------
 
-        fitvals = mu.tolist()
+        best_idx = np.argsort(acquisition)[:n_eval // 2]
+
+        uncertain_idx = np.argsort(-sigma)[:n_eval // 2]
+
+        real_idx = np.unique(
+            np.concatenate([
+                best_idx,
+                uncertain_idx
+            ])
+        )
+
+        # -------------------------------------------------
+        # SAFE CMA FITNESS
+        # -------------------------------------------------
+
+        # ---------------------------------------------
+# SURROGATE FITNESS
+# ---------------------------------------------
+
+        fitvals = mu.copy().tolist()
 
         new_X = []
+
         new_y = []
 
-        # -------------------------------------------------
+        # ---------------------------------------------
         # REAL EVALUATIONS
-        # -------------------------------------------------
+        # ---------------------------------------------
 
         for i in real_idx:
 
@@ -228,13 +250,13 @@ def run_instance(fun, dim, budget, seed):
             n_since_retrain += 1
 
         # -------------------------------------------------
-        # TELL CMA
+        # CMA UPDATE
         # -------------------------------------------------
 
         es.tell(solutions, fitvals)
 
         # -------------------------------------------------
-        # UPDATE DATASET
+        # UPDATE DATA
         # -------------------------------------------------
 
         if len(new_X) > 0:
@@ -244,22 +266,53 @@ def run_instance(fun, dim, budget, seed):
             y = np.append(y, new_y)
 
             # ---------------------------------------------
-            # RETRAIN SURROGATE
+            # LOCAL RETRAINING
             # ---------------------------------------------
 
             if n_since_retrain >= RETRAIN_EVERY:
 
-                y_norm, y_mean, y_std = normalize_y(y)
+                center = np.array(es.mean)
 
-                model.fit(X, y_norm)
+                X_local, y_local = get_local_dataset(
+                    X,
+                    y,
+                    center,
+                    LOCAL_TRAIN_SIZE
+                )
+
+                # -----------------------------------------
+                # RANK TRAINING
+                # -----------------------------------------
+
+                local_ranks = np.argsort(
+                    np.argsort(y_local)
+                ).astype(np.float32)
+
+                y_local_train = (
+                    local_ranks /
+                    max(local_ranks.max(), 1)
+                )
+
+                model.fit(
+                    X_local,
+                    y_local_train
+                )
 
                 n_since_retrain = 0
+
+                refit_count += 1
+
+                # print(
+                #     f"refit : {refit_count}"
+                # )
 
     # =====================================================
     # PAD HISTORY
     # =====================================================
 
-    history += [history[-1]] * (budget - len(history))
+    history += [history[-1]] * (
+        budget - len(history)
+    )
 
     return np.array(history[:budget])
 
@@ -271,16 +324,29 @@ def run_instance(fun, dim, budget, seed):
 def main():
 
     suite_opts = (
-        f"function_indices: {','.join(map(str, FUNCTION_IDS))} "
-        f"dimensions: {' '.join(map(str, DIMENSIONS))} "
-        f"instance_indices: 1-{N_INSTANCES}"
+        f"function_indices: "
+        f"{','.join(map(str, FUNCTION_IDS))} "
+        f"dimensions: "
+        f"{' '.join(map(str, DIMENSIONS))} "
+        f"instance_indices: "
+        f"1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
     )
 
-    suite = cocoex.Suite("bbob", "", suite_opts)
+    suite = cocoex.Suite(
+        "bbob",
+        "",
+        suite_opts
+    )
+
+    result_folder = (
+        f"deepensemble_rank_"
+        f"{BUDGET_FACTOR}d_"
+        f"dim{'_'.join(map(str, DIMENSIONS))}"
+    )
 
     observer = cocoex.Observer(
         "bbob",
-        "result_folder: coco_output"
+        f"result_folder: {result_folder}"
     )
 
     collected = {}
@@ -291,19 +357,27 @@ def main():
 
         dim = fun.dimension
 
-        m = re.search(r"f(\d+)_i(\d+)", fun.id)
+        m = re.search(
+            r"f(\d+)_i(\d+)",
+            fun.id
+        )
 
         fun_num = int(m.group(1))
+
         inst_num = int(m.group(2))
 
         budget = BUDGET_FACTOR * dim
 
-        seed = RANDOM_SEED + fun_num * 1000 + inst_num
+        seed = (
+            RANDOM_SEED
+            + fun_num * 1000
+            + inst_num
+        )
 
         print(
             f"f{fun_num:02d} "
             f"d{dim:02d} "
-            f"i{inst_num:02d} ",
+            f"i{inst_num:03d} ",
             end="",
             flush=True
         )
@@ -315,9 +389,14 @@ def main():
             seed=seed
         )
 
-        print(f"best={history[-1]:.3e}")
+        print(
+            f"best={history[-1]:.3e}"
+        )
 
-        collected.setdefault((fun_num, dim), []).append(history)
+        collected.setdefault(
+            (fun_num, dim),
+            []
+        ).append(history)
 
     # =====================================================
     # SAVE RESULTS
@@ -330,9 +409,24 @@ def main():
             f"dim_{dim}_fun_{fun_num}.npy"
         )
 
-        np.save(path, np.array(histories))
+        np.save(
+            path,
+            np.array(histories)
+        )
 
-    print(f"\nResults saved to {RESULTS_DIR}/")
+    print("\n===================================")
+
+    print(
+        f"Results saved to:\n"
+        f"{RESULTS_DIR}"
+    )
+
+    print(
+        f"\nCOCO output saved to:\n"
+        f"{result_folder}"
+    )
+
+    print("===================================")
 
 
 # =========================================================
@@ -340,4 +434,5 @@ def main():
 # =========================================================
 
 if __name__ == "__main__":
+
     main()

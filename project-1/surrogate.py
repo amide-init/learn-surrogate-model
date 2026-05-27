@@ -1,13 +1,10 @@
-# surrogate.py
-
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
 
 RANDOM_SEED = 42
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cpu")
 
 
 # =========================================================
@@ -22,10 +19,10 @@ class _Net(nn.Module):
 
         self.body = nn.Sequential(
 
-            nn.Linear(d, 32),
+            nn.Linear(d, 64),
             nn.ReLU(),
 
-            nn.Linear(32, 32),
+            nn.Linear(64, 32),
             nn.ReLU(),
         )
 
@@ -49,20 +46,10 @@ class _Net(nn.Module):
 
 
 # =========================================================
-# GAUSSIAN NLL LOSS
+# LOSS
 # =========================================================
 
 def _nll_loss(mu, log_var, y):
-
-    """
-    Gaussian Negative Log Likelihood
-
-    0.5 * (
-        log(sigma^2)
-        +
-        (y - mu)^2 / sigma^2
-    )
-    """
 
     return (
         0.5 * (
@@ -83,8 +70,7 @@ class DeepEnsemble:
         self,
         d,
         n_models=5,
-        epochs=100,
-        batch_size=32,
+        epochs=50,
         lr=1e-3,
     ):
 
@@ -94,13 +80,39 @@ class DeepEnsemble:
 
         self.epochs = epochs
 
-        self.batch_size = batch_size
-
         self.lr = lr
 
         self.models = []
 
+        self.opts = []
+
         self._stats = None
+
+    # =====================================================
+    # INITIALIZE MODELS ONCE
+    # =====================================================
+
+    def _initialize_models(self):
+
+        if len(self.models) > 0:
+            return
+
+        for i in range(self.n_models):
+
+            torch.manual_seed(
+                RANDOM_SEED + i
+            )
+
+            net = _Net(self.d).to(DEVICE)
+
+            opt = torch.optim.Adam(
+                net.parameters(),
+                lr=self.lr
+            )
+
+            self.models.append(net)
+
+            self.opts.append(opt)
 
     # =====================================================
     # FIT
@@ -108,16 +120,14 @@ class DeepEnsemble:
 
     def fit(self, X, y):
 
-        # -------------------------------------------------
-        # NORMALIZATION
-        # -------------------------------------------------
+        self._initialize_models()
 
-        xm = X.mean(axis=0)
+        xm = X.mean(0)
 
         xs = np.where(
-            X.std(axis=0) < 1e-8,
+            X.std(0) < 1e-8,
             1.0,
-            X.std(axis=0)
+            X.std(0)
         )
 
         ym = float(y.mean())
@@ -126,117 +136,48 @@ class DeepEnsemble:
 
         self._stats = (xm, xs, ym, ys)
 
-        Xn = (X - xm) / xs
+        Xn = torch.FloatTensor(
+            (X - xm) / xs
+        ).to(DEVICE)
 
-        yn = (y - ym) / ys
+        yn = torch.FloatTensor(
+            (y - ym) / ys
+        ).to(DEVICE)
 
-        X_tensor = torch.FloatTensor(Xn)
-
-        y_tensor = torch.FloatTensor(yn)
-
-        self.models = []
-
-        # =================================================
-        # TRAIN EACH MODEL
-        # =================================================
-
-        for i in range(self.n_models):
-
-            torch.manual_seed(RANDOM_SEED + i)
-
-            np.random.seed(RANDOM_SEED + i)
-
-            # ---------------------------------------------
-            # BOOTSTRAP SAMPLING
-            # ---------------------------------------------
+        for model, opt in zip(
+            self.models,
+            self.opts
+        ):
 
             idx = np.random.choice(
-                len(X_tensor),
-                len(X_tensor),
+                len(Xn),
+                len(Xn),
                 replace=True
             )
 
-            X_boot = X_tensor[idx]
+            X_boot = Xn[idx]
 
-            y_boot = y_tensor[idx]
+            y_boot = yn[idx]
 
-            dataset = TensorDataset(X_boot, y_boot)
+            model.train()
 
-            loader = DataLoader(
-                dataset,
-                batch_size=min(self.batch_size, len(dataset)),
-                shuffle=True
-            )
+            for _ in range(self.epochs):
 
-            # ---------------------------------------------
-            # MODEL
-            # ---------------------------------------------
+                opt.zero_grad()
 
-            net = _Net(self.d).to(DEVICE)
+                mu, log_var = model(X_boot)
 
-            optimizer = torch.optim.Adam(
-                net.parameters(),
-                lr=self.lr,
-                weight_decay=1e-4
-            )
+                loss = _nll_loss(
+                    mu,
+                    log_var,
+                    y_boot
+                )
 
-            best_loss = float("inf")
+                loss.backward()
 
-            patience = 20
+                opt.step()
 
-            patience_counter = 0
-
-            # ---------------------------------------------
-            # TRAINING LOOP
-            # ---------------------------------------------
-
-            for epoch in range(self.epochs):
-
-                net.train()
-
-                epoch_loss = 0.0
-
-                for xb, yb in loader:
-
-                    xb = xb.to(DEVICE)
-
-                    yb = yb.to(DEVICE)
-
-                    optimizer.zero_grad()
-
-                    mu, log_var = net(xb)
-
-                    loss = _nll_loss(mu, log_var, yb)
-
-                    loss.backward()
-
-                    optimizer.step()
-
-                    epoch_loss += loss.item()
-
-                epoch_loss /= len(loader)
-
-                # -----------------------------------------
-                # EARLY STOPPING
-                # -----------------------------------------
-
-                if epoch_loss < best_loss:
-
-                    best_loss = epoch_loss
-
-                    patience_counter = 0
-
-                else:
-
-                    patience_counter += 1
-
-                if patience_counter >= patience:
-
-                    break
-
-            net.eval()
-
-            self.models.append(net)
+            model.eval()
 
     # =====================================================
     # PREDICT
@@ -246,9 +187,9 @@ class DeepEnsemble:
 
         xm, xs, ym, ys = self._stats
 
-        Xn = (X - xm) / xs
-
-        X_tensor = torch.FloatTensor(Xn).to(DEVICE)
+        Xn = torch.FloatTensor(
+            (X - xm) / xs
+        ).to(DEVICE)
 
         mus = []
 
@@ -258,35 +199,25 @@ class DeepEnsemble:
 
             for model in self.models:
 
-                mu, log_var = model(X_tensor)
+                mu, log_var = model(Xn)
 
-                mu = mu.cpu().numpy()
+                mus.append(
+                    mu.cpu().numpy()
+                )
 
-                var = log_var.exp().cpu().numpy()
-
-                mus.append(mu)
-
-                vars_.append(var)
+                vars_.append(
+                    log_var.exp().cpu().numpy()
+                )
 
         mus = np.stack(mus)
 
         vars_ = np.stack(vars_)
 
-        # =================================================
-        # MIXTURE OF GAUSSIANS
-        #
-        # total variance =
-        # mean(predicted variance)
-        # +
-        # variance of ensemble means
-        # =================================================
-
-        ensemble_mu = mus.mean(axis=0)
+        ensemble_mu = mus.mean(0)
 
         ensemble_var = (
-            (vars_ + mus ** 2).mean(axis=0)
-            -
-            ensemble_mu ** 2
+            (vars_ + mus ** 2).mean(0)
+            - ensemble_mu ** 2
         )
 
         ensemble_var = np.maximum(
@@ -294,14 +225,11 @@ class DeepEnsemble:
             1e-12
         )
 
-        ensemble_std = np.sqrt(ensemble_var)
+        ensemble_std = np.sqrt(
+            ensemble_var
+        )
 
-        # =================================================
-        # DENORMALIZE
-        # =================================================
-
-        final_mu = ensemble_mu * ys + ym
-
-        final_std = ensemble_std * ys
-
-        return final_mu, final_std
+        return (
+            ensemble_mu * ys + ym,
+            ensemble_std * ys
+        )
