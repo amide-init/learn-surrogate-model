@@ -43,10 +43,10 @@ LOCAL_TRAIN_SIZE = 250       # local training subset around CMA mean
 
 N_INSTANCES  = 15
 DIMENSIONS   = [2]
-FUNCTION_IDS = [2,3]
+FUNCTION_IDS = list(range(1, 25))
 
 # At most 50% of a CMA generation uses true evaluations.
-TRUE_EVAL_FRACTION = 0.50
+TRUE_EVAL_FRACTION = 0.40
 
 # Polishing: automatic trigger — no function-number checks.
 POLISH_START_FRAC     = 0.70   # don't polish before 70% budget used
@@ -135,22 +135,56 @@ def should_use_polish_mode(
 # RESCUE TRIGGER  (automatic, no fun_num)
 # =========================================================
 
-def should_rescue(
-    n_real: int,
-    budget: int,
-    no_improve_gens: int,
+def should_protect_local_convergence(best: float, es, domain_range: float) -> bool:
+    """
+    True when the run is already close to target or CMA has converged tightly.
+    Prevents probe-rescue from destroying a near-solved local descent.
+    """
+    close_enough      = best                < 1e-3
+    very_small_sigma  = float(es.sigma)     < 1e-3 * domain_range
+    return close_enough or very_small_sigma
+
+
+def probe_rescue(
+    fun,
+    lb: np.ndarray,
+    ub: np.ndarray,
+    dim: int,
+    seed: int,
+    n_probe: int,
     best: float,
-    prev_best_window,   # reserved; not used in current trigger
-) -> bool:
+    budget: int,
+    n_real: int,
+):
     """
-    Fire when the run is clearly stuck mid-budget and not yet close to target.
-    Rescue runs 2 full real CMA-ES generations to give CMA direct covariance
-    feedback — useful for functions where the surrogate is misleading.
+    Evaluate n_probe random global points.  If any beats the current best,
+    return the best probe as a restart candidate; otherwise return None.
+
+    Only restarts CMA when a probe genuinely improves the run — safer than
+    unconditional global restart.
     """
-    enough_budget_used = n_real >= int(0.45 * budget)
-    stuck              = no_improve_gens >= 20
-    not_close          = best > 1e-3
-    return enough_budget_used and stuck and not_close
+    rng     = np.random.default_rng(seed)
+    probe_X: List[np.ndarray] = []
+    probe_y: List[float]      = []
+
+    for _ in range(min(n_probe, budget - n_real)):
+        x = lb + rng.random(dim) * (ub - lb)
+        f = float(fun(x))
+        probe_X.append(np.asarray(x, dtype=float))
+        probe_y.append(f)
+        n_real += 1
+
+    if not probe_y:
+        return None, None, n_real
+
+    probe_y_arr = np.asarray(probe_y)
+    probe_X_arr = np.asarray(probe_X)
+    best_idx    = int(np.argmin(probe_y_arr))
+
+    if probe_y_arr[best_idx] < best:
+        return probe_X_arr[best_idx], float(probe_y_arr[best_idx]), n_real
+
+    return None, None, n_real
 
 
 # =========================================================
@@ -253,7 +287,6 @@ def run_instance(
 
             restart_count   += 1
             no_improve_gens  = 0
-            surrogate_tau    = 0.50
             rng              = np.random.default_rng(seed + 1000 * restart_count)
             x_best           = X[int(np.argmin(y))]
 
@@ -265,38 +298,6 @@ def run_instance(
                 sigma_restart = max(0.03 * domain_range, 0.35 * sigma0)
 
             es = make_cma(x_start, sigma_restart, lb, ub, seed + restart_count)
-
-        # ------------------------------------------------------
-        # Rescue mode — 2 full real CMA generations
-        #
-        # Fires when: budget >= 45% used AND stuck >= 20 gens
-        #             AND best > 1e-3 (not already close).
-        # Checked before polish so it can still fire after 70% budget.
-        # ------------------------------------------------------
-        if should_rescue(n_real, budget, no_improve_gens, best, None):
-
-            for _ in range(2):
-
-                if budget - n_real < es.popsize:
-                    break
-
-                solutions = es.ask()
-                vals: List[float] = []
-
-                for x in solutions:
-                    f = float(fun(x))
-                    vals.append(f)
-                    best = min(best, f)
-                    history.append(best)
-                    X    = np.vstack([X, np.asarray(x, dtype=float).reshape(1, -1)])
-                    y    = np.append(y, f)
-                    n_real          += 1
-                    n_since_retrain += 1
-
-                es.tell(solutions, vals)
-
-            no_improve_gens = 0
-            continue
 
         # ------------------------------------------------------
         # Polish mode — pure CMA-ES (automatic trigger, no fun_num)
@@ -328,11 +329,10 @@ def run_instance(
             if n_eval == lam:
                 es.tell(solutions, true_vals)
 
-            # Only reset stagnation on improvement — never increment in
-            # polish mode so normal-phase count does not bleed in and
-            # trigger an unintended restart.
             if best < prev_best:
                 no_improve_gens = 0
+            else:
+                no_improve_gens += 1
 
             if new_X:
                 X = np.vstack([X, np.asarray(new_X)])
@@ -346,6 +346,46 @@ def run_instance(
                 n_since_retrain = 0
 
             continue
+
+        # ------------------------------------------------------
+        # Probe-rescue — fires only when strongly stuck and not near solution
+        #
+        # Trigger (all must hold):
+        #   - 60% of budget used
+        #   - no improvement for >= 35 gens
+        #   - best > 1e-2  (not already close)
+        #   - NOT in local convergence (sigma not tiny, best not < 1e-3)
+        #
+        # Evaluates 6 random probe points.  CMA restarts ONLY if a probe
+        # actually beats the current best — never destroys a converging run.
+        # ------------------------------------------------------
+        if (
+            n_real          >= int(0.60 * budget) and
+            no_improve_gens >= 35                 and
+            best            >  1e-2               and
+            not should_protect_local_convergence(best, es, domain_range)
+        ):
+            x_probe, f_probe, n_real = probe_rescue(
+                fun=fun, lb=lb, ub=ub, dim=dim,
+                seed=seed + 9000 + restart_count,
+                n_probe=6, best=best, budget=budget, n_real=n_real,
+            )
+
+            if x_probe is not None:
+                restart_count += 1
+                X    = np.vstack([X, x_probe.reshape(1, -1)])
+                y    = np.append(y, f_probe)
+                best = min(best, f_probe)
+                history.append(best)
+
+                es = make_cma(
+                    x_probe, domain_range / 4.0, lb, ub,
+                    seed + 9000 + restart_count,
+                )
+
+                no_improve_gens = 0
+                surrogate_tau   = 0.50
+                continue
 
         # ------------------------------------------------------
         # Normal AFN-CMA-ES generation
@@ -404,8 +444,6 @@ def run_instance(
             unevaluated                = np.ones(lam, dtype=bool)
             unevaluated[list(eval_map.keys())] = False
             cma_scores[unevaluated]   += 0.25   # mild penalty; 0.50 distorted CMA ranking
-
-        cma_scores = np.clip(cma_scores, 0.0, 1.0)
 
         es.tell(solutions, cma_scores.tolist())
 
